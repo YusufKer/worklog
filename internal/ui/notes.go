@@ -33,6 +33,12 @@ func (n *notesModel) setSize(w, h int) {
 	}
 }
 
+// invalidate drops cached renders so the next show re-reads notes.
+func (n *notesModel) invalidate() {
+	n.cache = map[string]string{}
+	n.shownID = ""
+}
+
 // show displays the given todo, resetting scroll when it changes.
 func (n *notesModel) show(t *store.Todo) {
 	if t == nil {

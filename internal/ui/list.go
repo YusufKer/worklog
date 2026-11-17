@@ -35,6 +35,16 @@ func (l *listModel) selected() *store.Todo {
 	return l.todos[l.cursor]
 }
 
+func (l *listModel) selectID(id string) {
+	for i, t := range l.todos {
+		if t.ID == id {
+			l.cursor = i
+			break
+		}
+	}
+	l.scroll()
+}
+
 func (l *listModel) setHeight(h int) {
 	l.height = h
 	l.scroll()

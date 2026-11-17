@@ -11,7 +11,7 @@ func helpFor(f focus) []hint {
 	case focusAgent:
 		return []hint{{"esc", "back"}, {"tab", "focus"}, {"q", "quit"}}
 	default:
-		return []hint{{"j/k", "move"}, {"g/G", "top/bottom"}, {"enter", "open"}, {"tab", "focus"}, {"q", "quit"}}
+		return []hint{{"j/k", "move"}, {"n", "new"}, {"x", "done"}, {"d", "delete"}, {"enter", "open"}, {"tab", "focus"}, {"q", "quit"}}
 	}
 }
 

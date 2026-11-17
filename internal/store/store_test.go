@@ -71,3 +71,56 @@ func TestLoadAllSortsAndGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateToggleDelete(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+
+	td, err := s.Create("Fix: the Bug!", "2026-11-17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(td.Path) != "2026-11-17-fix-the-bug.md" {
+		t.Fatalf("path = %s", td.Path)
+	}
+	dup, _ := s.Create("Fix the bug", "2026-11-17")
+	if filepath.Base(dup.Path) != "2026-11-17-fix-the-bug-2.md" {
+		t.Fatalf("dup path = %s", dup.Path)
+	}
+
+	// Simulate an external edit to the notes; Update must preserve it.
+	ext := *td
+	ext.Notes = "edited elsewhere\n"
+	if err := s.Save(&ext); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Update(td, func(x *Todo) { x.Done = !x.Done })
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _ := Load(td.Path)
+	if !reloaded.Done || reloaded.Notes != "edited elsewhere\n" || reloaded.Title != "Fix: the Bug!" {
+		t.Fatalf("reloaded = %+v", reloaded)
+	}
+	if got.ID != td.ID {
+		t.Fatalf("id changed: %s -> %s", td.ID, got.ID)
+	}
+
+	if err := s.Delete(td); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(td.Path) || !fileExists(filepath.Join(dir, ".trash", "2026-11-17-fix-the-bug.md")) {
+		t.Fatal("file not moved to trash")
+	}
+	todos, _ := s.LoadAll()
+	if len(todos) != 1 {
+		t.Fatalf("want 1 todo after delete, got %d", len(todos))
+	}
+
+	if _, err := s.Create("  ", "2026-11-17"); err == nil {
+		t.Fatal("expected error for empty title")
+	}
+	if _, err := s.Create("x", "17/11/2026"); err == nil {
+		t.Fatal("expected error for bad date")
+	}
+}

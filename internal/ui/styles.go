@@ -13,12 +13,14 @@ var (
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#7A7A85", Dark: "#8A8A96"}
 	colorSelBg  = lipgloss.AdaptiveColor{Light: "#E8E4FF", Dark: "#2E2A4A"}
 	colorDone   = lipgloss.AdaptiveColor{Light: "#3C9A5F", Dark: "#6BCB8B"}
+	colorError  = lipgloss.AdaptiveColor{Light: "#C23B3B", Dark: "#FF7A7A"}
 
 	styleHeader   = lipgloss.NewStyle().Bold(true).Foreground(colorMuted)
 	styleMuted    = lipgloss.NewStyle().Foreground(colorMuted)
 	styleSelected = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	styleDone     = lipgloss.NewStyle().Foreground(colorMuted).Strikethrough(true)
 	styleDoneIcon = lipgloss.NewStyle().Foreground(colorDone)
+	styleError    = lipgloss.NewStyle().Foreground(colorError)
 	styleHelpKey  = lipgloss.NewStyle().Bold(true)
 	styleHelp     = lipgloss.NewStyle().Foreground(colorMuted)
 )
