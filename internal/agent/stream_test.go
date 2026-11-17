@@ -89,8 +89,8 @@ func TestParseErrorResult(t *testing.T) {
 }
 
 func TestArgs(t *testing.T) {
-	args := strings.Join(Args(Options{Prompt: "hi", Session: "abc", SystemPrompt: "sys"}), " ")
-	for _, want := range []string{"-p hi", "--output-format stream-json", "--resume abc", "--append-system-prompt sys", "--tools " + Tools} {
+	args := strings.Join(Claude{Model: "sonnet"}.Args(Options{Message: "hi", Session: "abc", SystemPrompt: "sys"}), " ")
+	for _, want := range []string{"-p hi", "--output-format stream-json", "--resume abc", "--append-system-prompt sys", "--tools " + Tools, "--model sonnet"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args missing %q: %s", want, args)
 		}

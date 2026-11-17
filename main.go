@@ -9,22 +9,32 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/yusuf/worklog/internal/agent"
+	"github.com/yusuf/worklog/internal/config"
 	"github.com/yusuf/worklog/internal/store"
 	"github.com/yusuf/worklog/internal/ui"
 )
 
 func main() {
-	dirFlag := flag.String("dir", "", "data directory (default $WORKLOG_DIR or ~/worklog)")
+	dirFlag := flag.String("dir", "", "data directory (overrides $WORKLOG_DIR and the config file)")
+	configFlag := flag.String("config", config.DefaultPath(), "config file")
 	demo := flag.Bool("demo", false, "run against a temporary directory seeded with sample todos")
 	flag.Parse()
 
-	if err := run(*dirFlag, *demo); err != nil {
+	if err := run(*dirFlag, *configFlag, *demo); err != nil {
 		fmt.Fprintln(os.Stderr, "worklog:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir string, demo bool) error {
+func run(dirFlag, configPath string, demo bool) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+
+	// Data directory: -demo, then -dir, then $WORKLOG_DIR, then config, then ~/worklog.
+	dir := dirFlag
 	switch {
 	case demo:
 		d, err := os.MkdirTemp("", "worklog-demo-")
@@ -40,14 +50,13 @@ func run(dir string, demo bool) error {
 		dir = os.Getenv("WORKLOG_DIR")
 	}
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		dir = filepath.Join(home, "worklog")
+		dir = cfg.Dir
+	}
+	if dir == "" {
+		dir = "~/worklog"
 	}
 
-	s, err := store.New(dir)
+	s, err := store.New(config.ExpandHome(dir))
 	if err != nil {
 		return err
 	}
@@ -56,12 +65,18 @@ func run(dir string, demo bool) error {
 		return err
 	}
 
+	var backend agent.Backend = agent.Claude{Bin: config.ExpandHome(cfg.Agent.ClaudePath), Model: cfg.Agent.Model}
+	if cfg.Agent.Type == "command" {
+		backend = agent.Command{Label: cfg.Agent.Name, Argv: cfg.Agent.Command}
+	}
+
 	glamStyle := "light"
 	if lipgloss.HasDarkBackground() {
 		glamStyle = "dark"
 	}
 
-	_, err = tea.NewProgram(ui.New(s, todos, glamStyle), tea.WithAltScreen()).Run()
+	m := ui.New(s, todos, ui.Options{GlamStyle: glamStyle, Agent: backend, StaleAfter: cfg.StaleAfter()})
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
 

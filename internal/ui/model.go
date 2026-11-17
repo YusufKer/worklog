@@ -30,13 +30,22 @@ const (
 	minHeight = 12
 )
 
+// Options configure the UI.
+type Options struct {
+	GlamStyle  string        // "dark" or "light", detected before the program starts
+	Agent      agent.Backend // the agent behind the agent pane
+	StaleAfter time.Duration // forgotten-timer threshold
+}
+
 // Model is the root Bubble Tea model.
 type Model struct {
-	store *store.Store
-	list  listModel
-	notes notesModel
-	agent agentModel
-	focus focus
+	store      *store.Store
+	backend    agent.Backend
+	staleAfter time.Duration
+	list       listModel
+	notes      notesModel
+	agent      agentModel
+	focus      focus
 
 	modal modalKind
 	form  newTodoForm
@@ -53,10 +62,16 @@ type Model struct {
 	agentH        int
 }
 
-// New builds the UI. glamStyle is "dark" or "light", detected before the
-// program starts so it does not race with Bubble Tea's input handling.
-func New(s *store.Store, todos []*store.Todo, glamStyle string) Model {
-	m := Model{store: s, notes: newNotes(glamStyle), agent: newAgent(glamStyle), kept: map[string]bool{}}
+// New builds the UI.
+func New(s *store.Store, todos []*store.Todo, o Options) Model {
+	m := Model{
+		store:      s,
+		backend:    o.Agent,
+		staleAfter: o.StaleAfter,
+		notes:      newNotes(o.GlamStyle),
+		agent:      newAgent(o.GlamStyle, o.Agent.Name(), isClaude(o.Agent)),
+		kept:       map[string]bool{},
+	}
 	m.list.setTodos(todos)
 	m.syncSelection()
 	m.ticking = m.runningTodo() != nil
@@ -64,7 +79,10 @@ func New(s *store.Store, todos []*store.Todo, glamStyle string) Model {
 	return m
 }
 
-const staleAfter = 4 * time.Hour
+func isClaude(b agent.Backend) bool {
+	_, ok := b.(agent.Claude)
+	return ok
+}
 
 type timerTickMsg struct{}
 
@@ -106,7 +124,7 @@ func (m *Model) checkStale() {
 	}
 	now := time.Now()
 	for _, t := range m.list.todos {
-		if e := t.Running(); e != nil && e.Stale(now, staleAfter) && !m.kept[t.ID] {
+		if e := t.Running(); e != nil && e.Stale(now, m.staleAfter) && !m.kept[t.ID] {
 			m.stale = newStaleForm(t, now)
 			m.modal = modalStaleTimer
 			return
@@ -320,18 +338,24 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 	}
 
 	c.add(entUser, text)
-	run, err := agent.Start(agent.Options{
+	resume := ""
+	if m.backend.Resumable() {
+		resume = t.Session
+	}
+	run, err := m.backend.Start(agent.Options{
 		Dir:          m.store.Dir,
-		Prompt:       text,
+		Message:      text,
 		SystemPrompt: systemPrompt(t),
-		Session:      t.Session,
+		NotesFile:    t.Path,
+		Title:        t.Title,
+		Session:      resume,
 	})
 	if err != nil {
 		c.add(entError, capitalize(err.Error()))
 		m.agent.refresh()
 		return m, nil
 	}
-	c.run, c.session, c.resumed = run, "", t.Session != ""
+	c.run, c.session, c.resumed = run, "", resume != ""
 	m.agent.refresh()
 	m.agent.vp.GotoBottom()
 	return m, tea.Batch(waitEvent(t.ID, run.Events), m.agent.spin.Tick)
@@ -356,7 +380,7 @@ func (m *Model) finishRun(todoID string, done agent.EvDone) {
 		c.add(entInfo, "Previous conversation not found — the next message starts a new one.")
 		m.agent.refresh()
 	}
-	if session == t.Session || (session == "" && !c.resumed) {
+	if !m.backend.Resumable() || session == t.Session || (session == "" && !c.resumed) {
 		return
 	}
 	if _, err := m.store.Update(t, func(t *store.Todo) { t.Session = session }); err != nil {
@@ -393,7 +417,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		if t := m.list.selected(); t != nil {
 			if m.agent.running(t.ID) {
-				m.setStatus("Claude is working on this todo — stop it first (esc in the agent pane)", true)
+				m.setStatus(m.backend.Name()+" is working on this todo — stop it first (esc in the agent pane)", true)
 			} else {
 				m.modal = modalDelete
 			}
@@ -432,7 +456,7 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.agent.running(t.ID) {
-		m.setStatus("Claude is editing these notes — wait for it, or press esc in the agent pane to stop", true)
+		m.setStatus(m.backend.Name()+" is working on these notes — wait for it, or press esc in the agent pane to stop", true)
 		return m, nil
 	}
 	m.setFocus(focusNotes)
@@ -652,9 +676,9 @@ func (m Model) View() string {
 		}
 	}
 	notes := renderPane(notesTitle, m.notes.view(), rightW, m.notesH, m.focus == focusNotes)
-	agentTitle := "Agent"
+	agentTitle := "Agent · " + m.backend.Name()
 	if t := m.list.selected(); t != nil && m.agent.running(t.ID) {
-		agentTitle = "Agent · working"
+		agentTitle += " · working"
 	}
 	agent := renderPane(agentTitle, m.agent.view(rightW-2, m.agentH-2, m.focus == focusAgent),
 		rightW, m.agentH, m.focus == focusAgent)

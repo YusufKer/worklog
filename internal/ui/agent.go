@@ -78,13 +78,15 @@ type agentModel struct {
 	glamStyle string
 	renderer  *glamour.TermRenderer
 	width     int
+	name      string // agent name for prompts
+	markdown  bool   // render finished replies as Markdown
 }
 
-func newAgent(glamStyle string) agentModel {
+func newAgent(glamStyle, name string, markdown bool) agentModel {
 	in := textinput.New()
 	in.Prompt = "› "
 	in.PromptStyle = styleSelected
-	in.Placeholder = "Ask Claude to research or edit these notes…"
+	in.Placeholder = "Ask " + name + " to research or edit these notes…"
 	in.PlaceholderStyle = styleMuted
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(styleSelected))
@@ -94,6 +96,8 @@ func newAgent(glamStyle string) agentModel {
 		input:     in,
 		spin:      sp,
 		glamStyle: glamStyle,
+		name:      name,
+		markdown:  markdown,
 	}
 }
 
@@ -162,7 +166,7 @@ func (a *agentModel) refresh() {
 func (a *agentModel) render() string {
 	c, ok := a.convs[a.shownID]
 	if !ok || len(c.entries) == 0 {
-		return styleMuted.Render(" Ask Claude to research something or edit these notes,\n" +
+		return styleMuted.Render(" Ask " + a.name + " to research something or edit these notes,\n" +
 			" e.g. “add a next-steps checklist” or “research Stripe idempotency keys”.\n" +
 			" Each todo keeps its own conversation. Type /clear to start over.")
 	}
@@ -193,7 +197,7 @@ func (a *agentModel) render() string {
 // text as rendered Markdown.
 func (a *agentModel) renderText(e *entry, w int) string {
 	text := strings.TrimSpace(e.text)
-	if !e.final || text == "" {
+	if !e.final || text == "" || !a.markdown {
 		return " " + strings.ReplaceAll(ansi.Wrap(text, w, ""), "\n", "\n ")
 	}
 	if e.rendered != "" && e.renderedW == w {
@@ -221,11 +225,11 @@ func (a agentModel) view(width, height int, focused bool) string {
 	var prompt string
 	switch {
 	case a.running(a.shownID):
-		prompt = " " + a.spin.View() + styleMuted.Render(" Claude is working… esc to stop")
+		prompt = " " + a.spin.View() + styleMuted.Render(" "+a.name+" is working… esc to stop")
 	case focused:
 		prompt = " " + a.input.View()
 	default:
-		prompt = styleMuted.Render(" › press a to ask Claude")
+		prompt = styleMuted.Render(" › press a to ask " + a.name)
 	}
 	return a.vp.View() + "\n" + prompt
 }
@@ -263,7 +267,11 @@ func (a *agentModel) handle(msg agentEventMsg) (notesChanged bool) {
 		if ev.IsError {
 			c.add(entError, ev.Message)
 		} else {
-			c.add(entInfo, fmt.Sprintf("done in %s · $%.2f", ev.Elapsed.Round(time.Second), ev.CostUSD))
+			info := "done in " + ev.Elapsed.Round(time.Second).String()
+			if ev.CostUSD > 0 {
+				info += fmt.Sprintf(" · $%.2f", ev.CostUSD)
+			}
+			c.add(entInfo, info)
 		}
 		notesChanged = true
 	}
