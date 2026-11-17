@@ -64,11 +64,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if m.notes.dirty() {
+				m.saveNotes() // don't lose edits on quit
+			}
 			return m, tea.Quit
 		}
 		m.status = ""
 		if m.modal != modalNone {
 			return m.updateModal(msg)
+		}
+		if m.notes.editing {
+			return m.updateEditor(msg)
 		}
 		// Fast key repeat can arrive as one multi-rune message ("jjj");
 		// handle each rune as its own keypress.
@@ -106,6 +112,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.modal == modalNew {
 		return m, m.form.update(msg)
 	}
+	if m.notes.editing {
+		var cmd tea.Cmd
+		m.notes.ta, cmd = m.notes.ta.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -121,6 +132,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.list.bottom()
 	case "enter", "l", "right":
 		m.focus = focusNotes
+	case "e":
+		return m.startEdit()
 	case "n":
 		m.modal = modalNew
 		m.form = newForm()
@@ -141,6 +154,8 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "h", "left":
 		m.focus = focusList
 		return m, nil
+	case "e":
+		return m.startEdit()
 	case "g", "home":
 		m.notes.vp.GotoTop()
 		return m, nil
@@ -151,6 +166,56 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.notes.vp, cmd = m.notes.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) startEdit() (tea.Model, tea.Cmd) {
+	t := m.list.selected()
+	if t == nil {
+		return m, nil
+	}
+	m.focus = focusNotes
+	return m, m.notes.startEdit(t)
+}
+
+func (m Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		if m.notes.dirty() && !m.saveNotes() {
+			return m, nil // keep editing so nothing is lost
+		}
+		m.notes.stopEdit()
+		return m, nil
+	case "ctrl+s":
+		if m.saveNotes() {
+			m.setStatus("Saved", false)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.notes.ta, cmd = m.notes.ta.Update(msg)
+	return m, cmd
+}
+
+// saveNotes writes the editor contents to the todo being edited.
+func (m *Model) saveNotes() bool {
+	var target *store.Todo
+	for _, t := range m.list.todos {
+		if t.ID == m.notes.editID {
+			target = t
+		}
+	}
+	if target == nil {
+		m.setStatus("Couldn't save: todo no longer exists", true)
+		return false
+	}
+	notes := m.notes.value()
+	if _, err := m.store.Update(target, func(t *store.Todo) { t.Notes = notes }); err != nil {
+		m.setStatus("Couldn't save: "+err.Error(), true)
+		return false
+	}
+	m.notes.markSaved()
+	m.reload(target.ID)
+	return true
 }
 
 func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -269,8 +334,14 @@ func (m Model) View() string {
 	notesTitle := "Notes"
 	if t := m.list.selected(); t != nil {
 		notesTitle = "Notes: " + t.Title
+		if m.notes.editing {
+			notesTitle = "Editing: " + t.Title
+			if m.notes.dirty() {
+				notesTitle += " •"
+			}
+		}
 	}
-	notes := renderPane(notesTitle, m.notes.vp.View(), rightW, m.notesH, m.focus == focusNotes)
+	notes := renderPane(notesTitle, m.notes.view(), rightW, m.notesH, m.focus == focusNotes)
 	agent := renderPane("Agent", m.agent.view(rightW-2, m.agentH-2, m.focus == focusAgent),
 		rightW, m.agentH, m.focus == focusAgent)
 
@@ -294,6 +365,8 @@ func (m Model) footer() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "create"}, {"esc", "cancel"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.notes.editing:
+		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"ctrl+c", "save & quit"}})
 	}
 	return renderHelp(helpFor(m.focus))
 }
