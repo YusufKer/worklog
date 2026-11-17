@@ -20,12 +20,13 @@ const DateLayout = "2006-01-02"
 
 // Todo is a single work item. Its notes are the Markdown body of the file.
 type Todo struct {
-	ID      string    `yaml:"id"`
-	Title   string    `yaml:"title"`
-	Date    string    `yaml:"date"`
-	Done    bool      `yaml:"done"`
-	Created time.Time `yaml:"created,omitempty"`
-	Session string    `yaml:"session,omitempty"`
+	ID      string      `yaml:"id"`
+	Title   string      `yaml:"title"`
+	Date    string      `yaml:"date"`
+	Done    bool        `yaml:"done"`
+	Created time.Time   `yaml:"created,omitempty"`
+	Session string      `yaml:"session,omitempty"`
+	Time    []TimeEntry `yaml:"time,omitempty"`
 
 	Notes string `yaml:"-"`
 	Path  string `yaml:"-"`
@@ -245,25 +246,64 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// Group is a set of todos sharing a date.
+// Group is a set of todos shown under one date header.
 type Group struct {
 	Label string
 	Date  string
 	Todos []*Todo
 }
 
-// GroupByDate groups already-sorted todos by their date, labelling each group
-// relative to now (Today, Yesterday, or a short date).
+// Carried reports whether t is shown in this group although it is dated
+// earlier (an unfinished todo carried over to today).
+func (g Group) Carried(t *Todo) bool { return t.Date != g.Date }
+
+// GroupByDate groups already-sorted todos by date, newest first, labelling
+// each group relative to now (Today, Yesterday, or a short date).
+// Unfinished todos from earlier days are carried over into Today, after
+// today's own todos; their stored date is left unchanged.
 func GroupByDate(todos []*Todo, now time.Time) []Group {
-	var groups []Group
+	today := now.Format(DateLayout)
+	var future, current, past []*Todo
 	for _, t := range todos {
-		if len(groups) == 0 || groups[len(groups)-1].Date != t.Date {
-			groups = append(groups, Group{Label: DateLabel(t.Date, now), Date: t.Date})
+		switch {
+		case t.Date > today:
+			future = append(future, t)
+		case t.Date == today:
+			current = append(current, t)
+		case !t.Done:
+			current = append(current, t) // carried over
+		default:
+			past = append(past, t)
+		}
+	}
+
+	var groups []Group
+	add := func(date string, t *Todo) {
+		if len(groups) == 0 || groups[len(groups)-1].Date != date {
+			groups = append(groups, Group{Label: DateLabel(date, now), Date: date})
 		}
 		g := &groups[len(groups)-1]
 		g.Todos = append(g.Todos, t)
 	}
+	for _, t := range future {
+		add(t.Date, t)
+	}
+	for _, t := range current {
+		add(today, t)
+	}
+	for _, t := range past {
+		add(t.Date, t)
+	}
 	return groups
+}
+
+// Flatten returns the todos in display order.
+func Flatten(groups []Group) []*Todo {
+	var out []*Todo
+	for _, g := range groups {
+		out = append(out, g.Todos...)
+	}
+	return out
 }
 
 // DateLabel renders a YYYY-MM-DD date relative to now.

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	modalNone modalKind = iota
 	modalNew
 	modalDelete
+	modalStaleTimer
 )
 
 const modalWidth = 52
@@ -121,4 +123,66 @@ func overlay(bg, fg string, width, height int) string {
 		bgLines[row] = left + "\x1b[0m" + fl + "\x1b[0m" + right
 	}
 	return strings.Join(bgLines, "\n")
+}
+
+// staleTimerForm asks what to do with a timer that looks forgotten.
+type staleTimerForm struct {
+	todo  *store.Todo
+	start time.Time
+	input textinput.Model
+	err   string
+}
+
+func newStaleForm(t *store.Todo, now time.Time) staleTimerForm {
+	start := t.Running().Start.In(now.Location())
+	// Suggest 17:00 on the day it started, or an hour in if it started later.
+	y, mo, d := start.Date()
+	suggest := time.Date(y, mo, d, 17, 0, 0, 0, start.Location())
+	if !suggest.After(start) {
+		suggest = start.Add(time.Hour)
+	}
+	if suggest.After(now) {
+		suggest = now
+	}
+	in := textinput.New()
+	in.Prompt = ""
+	in.CharLimit = 16
+	in.Width = 16
+	in.SetValue(suggest.Format("2006-01-02 15:04"))
+	in.Focus()
+	return staleTimerForm{todo: t, start: start, input: in}
+}
+
+// stopTime parses "HH:MM" (on the start day) or "YYYY-MM-DD HH:MM".
+func (f staleTimerForm) stopTime(now time.Time) (time.Time, error) {
+	v := strings.TrimSpace(f.input.Value())
+	loc := now.Location()
+	t, err := time.ParseInLocation("2006-01-02 15:04", v, loc)
+	if err != nil {
+		hm, err2 := time.ParseInLocation("15:04", v, loc)
+		if err2 != nil {
+			return time.Time{}, fmt.Errorf("Use HH:MM or YYYY-MM-DD HH:MM")
+		}
+		y, mo, d := f.start.Date()
+		t = time.Date(y, mo, d, hm.Hour(), hm.Minute(), 0, 0, loc)
+	}
+	switch {
+	case !t.After(f.start):
+		return time.Time{}, fmt.Errorf("Must be after it started (%s)", f.start.Format("Mon 15:04"))
+	case t.After(now):
+		return time.Time{}, fmt.Errorf("Can't be in the future")
+	}
+	return t, nil
+}
+
+func (f staleTimerForm) view(now time.Time) string {
+	title := ansi.Truncate(f.todo.Title, modalWidth-8, "…")
+	body := "Timer still running on " + lipgloss.NewStyle().Bold(true).Render(title) + "\n" +
+		styleMuted.Render(fmt.Sprintf("since %s (%s)", f.start.Format("Mon Jan 2 15:04"),
+			store.FormatDuration(now.Sub(f.start)))) + "\n\n" +
+		"Stop at " + f.input.View()
+	if f.err != "" {
+		body += "\n" + styleError.Render(f.err)
+	}
+	return modalBox("Forgotten timer?", body)
 }

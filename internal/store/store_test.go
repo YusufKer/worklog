@@ -38,10 +38,10 @@ func TestLoadAllSortsAndGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("a.md", "---\ntitle: Old\ndate: 2026-11-14\n---\n")
+	write("a.md", "---\ntitle: Old\ndate: 2026-11-14\ndone: true\n---\n")
 	write("b.md", "---\ntitle: Today 1\ndate: 2026-11-17\ncreated: 2026-11-17T09:00:00Z\n---\n")
 	write("c.md", "---\ntitle: Today 2\ndate: 2026-11-17\ncreated: 2026-11-17T10:00:00Z\n---\n")
-	write("d.md", "---\ntitle: Yest\ndate: 2026-11-16\n---\n")
+	write("d.md", "---\ntitle: Yest\ndate: 2026-11-16\ndone: true\n---\n")
 
 	s, _ := New(dir)
 	todos, err := s.LoadAll()

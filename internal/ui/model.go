@@ -2,13 +2,16 @@
 package ui
 
 import (
+	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/yusuf/worklog/internal/agent"
 	"github.com/yusuf/worklog/internal/store"
 )
@@ -35,10 +38,14 @@ type Model struct {
 	agent agentModel
 	focus focus
 
-	modal  modalKind
-	form   newTodoForm
-	status string // one-shot message shown in the footer
-	isErr  bool
+	modal modalKind
+	form  newTodoForm
+	stale staleTimerForm
+	kept  map[string]bool // stale timers the user chose to keep running
+
+	ticking bool   // a timer tick loop is active
+	status  string // one-shot message shown in the footer
+	isErr   bool
 
 	width, height int
 	listW         int
@@ -49,13 +56,86 @@ type Model struct {
 // New builds the UI. glamStyle is "dark" or "light", detected before the
 // program starts so it does not race with Bubble Tea's input handling.
 func New(s *store.Store, todos []*store.Todo, glamStyle string) Model {
-	m := Model{store: s, notes: newNotes(glamStyle), agent: newAgent(glamStyle)}
+	m := Model{store: s, notes: newNotes(glamStyle), agent: newAgent(glamStyle), kept: map[string]bool{}}
 	m.list.setTodos(todos)
 	m.syncSelection()
+	m.ticking = m.runningTodo() != nil
+	m.checkStale()
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+const staleAfter = 4 * time.Hour
+
+type timerTickMsg struct{}
+
+func timerTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return timerTickMsg{} })
+}
+
+func (m Model) Init() tea.Cmd {
+	if m.ticking {
+		return timerTick()
+	}
+	return nil
+}
+
+// runningTodo returns the todo whose timer is running, if any.
+func (m Model) runningTodo() *store.Todo {
+	for _, t := range m.list.todos {
+		if t.Running() != nil {
+			return t
+		}
+	}
+	return nil
+}
+
+// ensureTick starts the once-a-second redraw loop while a timer runs.
+func (m *Model) ensureTick() tea.Cmd {
+	if m.ticking || m.runningTodo() == nil {
+		return nil
+	}
+	m.ticking = true
+	return timerTick()
+}
+
+// checkStale opens the forgotten-timer prompt for a timer that started on
+// an earlier day or has run too long.
+func (m *Model) checkStale() {
+	if m.modal != modalNone {
+		return
+	}
+	now := time.Now()
+	for _, t := range m.list.todos {
+		if e := t.Running(); e != nil && e.Stale(now, staleAfter) && !m.kept[t.ID] {
+			m.stale = newStaleForm(t, now)
+			m.modal = modalStaleTimer
+			return
+		}
+	}
+}
+
+func (m *Model) toggleTimer() tea.Cmd {
+	t := m.list.selected()
+	if t == nil {
+		return nil
+	}
+	now := time.Now()
+	if e := t.Running(); e != nil {
+		if err := m.store.StopTimer(t, now); err != nil {
+			m.setStatus("Couldn't stop timer: "+err.Error(), true)
+			return nil
+		}
+		m.setStatus(fmt.Sprintf("Stopped · %s on “%s”", store.FormatDuration(now.Sub(e.Start)), t.Title), false)
+	} else {
+		if err := m.store.StartTimer(t, m.list.todos, now); err != nil {
+			m.setStatus("Couldn't start timer: "+err.Error(), true)
+			return nil
+		}
+		m.setStatus("Timer started on “"+t.Title+"”", false)
+	}
+	m.reload(t.ID)
+	return m.ensureTick()
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -80,6 +160,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitEvent(msg.todoID, run.Events)
 		}
 		return m, nil
+
+	case timerTickMsg:
+		if m.runningTodo() == nil {
+			m.ticking = false
+			return m, nil
+		}
+		return m, timerTick()
 
 	case spinner.TickMsg:
 		if !m.agent.anyRunning() {
@@ -138,6 +225,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.modal == modalNew {
 		return m, m.form.update(msg)
+	}
+	if m.modal == modalStaleTimer {
+		var cmd tea.Cmd
+		m.stale.input, cmd = m.stale.input.Update(msg)
+		return m, cmd
 	}
 	if m.notes.editing {
 		var cmd tea.Cmd
@@ -290,6 +382,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
+	case "t":
+		return m, m.toggleTimer()
 	case "n":
 		m.modal = modalNew
 		m.form = newForm()
@@ -318,6 +412,8 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
+	case "t":
+		return m, m.toggleTimer()
 	case "g", "home":
 		m.notes.vp.GotoTop()
 		return m, nil
@@ -386,6 +482,38 @@ func (m *Model) saveNotes() bool {
 
 func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.modal {
+	case modalStaleTimer:
+		t, now := m.stale.todo, time.Now()
+		var err error
+		switch msg.String() {
+		case "enter":
+			var at time.Time
+			if at, err = m.stale.stopTime(now); err != nil {
+				m.stale.err = err.Error()
+				return m, nil
+			}
+			err = m.store.StopTimer(t, at)
+		case "n":
+			err = m.store.StopTimer(t, now)
+		case "d":
+			err = m.store.DiscardTimer(t)
+		case "k", "esc":
+			m.kept[t.ID] = true
+		default:
+			m.stale.err = ""
+			var cmd tea.Cmd
+			m.stale.input, cmd = m.stale.input.Update(msg)
+			return m, cmd
+		}
+		if err != nil {
+			m.stale.err = capitalize(err.Error())
+			return m, nil
+		}
+		m.modal = modalNone
+		m.reloadKeepSelection()
+		m.checkStale()
+		return m, nil
+
 	case modalDelete:
 		switch msg.String() {
 		case "y", "Y", "enter":
@@ -426,7 +554,13 @@ func (m *Model) toggleDone() {
 	if t == nil {
 		return
 	}
-	if _, err := m.store.Update(t, func(t *store.Todo) { t.Done = !t.Done }); err != nil {
+	now := time.Now()
+	if _, err := m.store.Update(t, func(t *store.Todo) {
+		t.Done = !t.Done
+		if e := t.Running(); t.Done && e != nil {
+			e.End = &now // finishing a todo stops its timer
+		}
+	}); err != nil {
 		m.setStatus("Couldn't update: "+err.Error(), true)
 		return
 	}
@@ -509,7 +643,7 @@ func (m Model) View() string {
 
 	notesTitle := "Notes"
 	if t := m.list.selected(); t != nil {
-		notesTitle = "Notes: " + t.Title
+		notesTitle = "Notes: " + t.Title + timeSummary(t, time.Now())
 		if m.notes.editing {
 			notesTitle = "Editing: " + t.Title
 			if m.notes.dirty() {
@@ -531,11 +665,49 @@ func (m Model) View() string {
 		body = overlay(body, m.form.view(), m.width, bodyH)
 	case modalDelete:
 		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
+	case modalStaleTimer:
+		body = overlay(body, m.stale.view(time.Now()), m.width, bodyH)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, body, m.footer())
 }
 
+// footer shows status or key hints on the left, and the running timer on
+// the right so it is visible from any pane.
 func (m Model) footer() string {
+	left := m.footerLeft()
+	t := m.runningTodo()
+	if t == nil {
+		return left
+	}
+	right := styleSelected.Render("⏱ "+store.FormatClock(time.Since(t.Running().Start))) +
+		styleMuted.Render(" "+ansi.Truncate(t.Title, 24, "…")) + " "
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		left = ansi.Truncate(left, max(m.width-lipgloss.Width(right)-1, 0), "…")
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+// timeSummary describes a todo's tracked time for the notes title.
+func timeSummary(t *store.Todo, now time.Time) string {
+	var parts []string
+	if today := t.ByDay(now)[now.Format(store.DateLayout)]; today >= time.Minute {
+		parts = append(parts, "today "+store.FormatDuration(today))
+	}
+	if total := t.Total(now); total >= time.Minute {
+		parts = append(parts, "total "+store.FormatDuration(total))
+	}
+	if !t.Done && t.Date < now.Format(store.DateLayout) {
+		parts = append(parts, "from "+shortDate(t.Date))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " · " + strings.Join(parts, " · ")
+}
+
+func (m Model) footerLeft() string {
 	switch {
 	case m.status != "" && m.isErr:
 		return " " + styleError.Render(m.status)
@@ -545,6 +717,8 @@ func (m Model) footer() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "create"}, {"esc", "cancel"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.modal == modalStaleTimer:
+		return renderHelp([]hint{{"enter", "stop at time"}, {"n", "stop now"}, {"k", "keep running"}, {"d", "discard"}})
 	case m.notes.editing:
 		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"ctrl+c", "save & quit"}})
 	}

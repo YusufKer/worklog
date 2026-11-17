@@ -11,19 +11,23 @@ import (
 
 // listModel is the date-grouped todo list on the left.
 type listModel struct {
-	todos  []*store.Todo // sorted; the cursor indexes into this
+	groups []store.Group
+	todos  []*store.Todo // display order; the cursor indexes into this
 	cursor int
 	offset int // first visible row
 	height int // visible rows
 }
 
 type listRow struct {
-	header string
-	todo   int // index into todos, -1 for headers/spacers
+	header  string
+	date    string // group date, for headers
+	todo    int    // index into todos, -1 for headers/spacers
+	carried bool
 }
 
 func (l *listModel) setTodos(todos []*store.Todo) {
-	l.todos = todos
+	l.groups = store.GroupByDate(todos, time.Now())
+	l.todos = store.Flatten(l.groups)
 	l.cursor = clamp(l.cursor, 0, len(todos)-1)
 	l.scroll()
 }
@@ -61,13 +65,13 @@ func (l *listModel) bottom() { l.cursor = max(len(l.todos)-1, 0); l.scroll() }
 func (l *listModel) rows() []listRow {
 	var rows []listRow
 	i := 0
-	for gi, g := range store.GroupByDate(l.todos, time.Now()) {
+	for gi, g := range l.groups {
 		if gi > 0 {
 			rows = append(rows, listRow{todo: -1})
 		}
-		rows = append(rows, listRow{header: g.Label, todo: -1})
-		for range g.Todos {
-			rows = append(rows, listRow{todo: i})
+		rows = append(rows, listRow{header: g.Label, date: g.Date, todo: -1})
+		for _, t := range g.Todos {
+			rows = append(rows, listRow{todo: i, carried: g.Carried(t)})
 			i++
 		}
 	}
@@ -102,46 +106,87 @@ func (l listModel) view(width int, focused bool) string {
 		return styleMuted.Render(" No todos yet.")
 	}
 	rows := l.rows()
+	now := time.Now()
 	var out []string
 	for _, r := range rows[min(l.offset, len(rows)):min(l.offset+l.height, len(rows))] {
-		out = append(out, l.renderRow(r, width, focused))
+		out = append(out, l.renderRow(r, width, focused, now))
 	}
 	return strings.Join(out, "\n")
 }
 
-func (l listModel) renderRow(r listRow, width int, focused bool) string {
+func (l listModel) renderRow(r listRow, width int, focused bool, now time.Time) string {
 	if r.todo < 0 {
 		if r.header == "" {
 			return ""
 		}
-		return styleHeader.Render(" " + r.header)
+		h := styleHeader.Render(" " + r.header)
+		if worked := store.WorkedOn(l.todos, r.date, now); worked >= time.Minute {
+			h += styleMuted.Render(" · " + store.FormatDuration(worked))
+		}
+		return h
 	}
 	t := l.todos[r.todo]
 	sel := r.todo == l.cursor
 
-	marker := "  "
-	if sel {
-		marker = styleSelected.Render("▶ ")
-	}
-	icon := styleMuted.Render("○")
-	if t.Done {
-		icon = styleDoneIcon.Render("✓")
+	// Every segment carries the highlight background itself; wrapping the
+	// whole line would be cut short by each segment's style reset.
+	plain := lipgloss.NewStyle()
+	st := func(s lipgloss.Style) lipgloss.Style {
+		if sel && focused {
+			return s.Background(colorSelBg)
+		}
+		return s
 	}
 
-	titleW := max(width-5, 1)
+	marker := st(plain).Render("  ")
+	if sel {
+		marker = st(styleSelected).Render("▶ ")
+	}
+	icon := st(styleMuted).Render("○")
+	if t.Done {
+		icon = st(styleDoneIcon).Render("✓")
+	}
+
+	// Right-hand detail: live timer, else total time, else carried-from date.
+	var right string
+	switch e := t.Running(); {
+	case e != nil:
+		right = st(styleSelected).Render("⏱ " + store.FormatClock(now.Sub(e.Start)))
+	case t.Total(now) >= time.Minute:
+		right = st(styleMuted).Render(store.FormatDuration(t.Total(now)))
+	case r.carried:
+		right = st(styleMuted).Render("↩ " + shortDate(t.Date))
+	}
+	rightW := lipgloss.Width(right)
+
+	titleW := max(width-5-rightW-2, 1)
+	if rightW == 0 {
+		titleW = max(width-5, 1)
+	}
 	title := ansi.Truncate(t.Title, titleW, "…")
 	switch {
 	case t.Done:
-		title = styleDone.Render(title)
+		title = st(styleDone).Render(title)
 	case sel:
-		title = styleSelected.Render(title)
+		title = st(styleSelected).Render(title)
+	default:
+		title = st(plain).Render(title)
 	}
 
-	line := " " + marker + icon + " " + title
-	if sel && focused {
-		line = lipgloss.NewStyle().Background(colorSelBg).Width(width).Render(line)
+	sp := func(n int) string { return st(plain).Render(strings.Repeat(" ", max(n, 0))) }
+	line := sp(1) + marker + icon + sp(1) + title
+	if right != "" {
+		line += sp(max(width-lipgloss.Width(line)-rightW-1, 1)) + right
 	}
-	return line
+	return line + sp(width-lipgloss.Width(line))
+}
+
+func shortDate(date string) string {
+	d, err := time.Parse(store.DateLayout, date)
+	if err != nil {
+		return date
+	}
+	return d.Format("Jan 2")
 }
 
 func clamp(v, lo, hi int) int {
