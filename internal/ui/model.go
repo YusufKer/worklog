@@ -5,9 +5,11 @@ import (
 	"math"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/yusuf/worklog/internal/agent"
 	"github.com/yusuf/worklog/internal/store"
 )
 
@@ -47,8 +49,9 @@ type Model struct {
 // New builds the UI. glamStyle is "dark" or "light", detected before the
 // program starts so it does not race with Bubble Tea's input handling.
 func New(s *store.Store, todos []*store.Todo, glamStyle string) Model {
-	m := Model{store: s, notes: newNotes(glamStyle)}
+	m := Model{store: s, notes: newNotes(glamStyle), agent: newAgent(glamStyle)}
 	m.list.setTodos(todos)
+	m.syncSelection()
 	return m
 }
 
@@ -59,14 +62,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		m.notes.show(m.list.selected())
+		m.syncSelection()
 		return m, nil
+
+	case agentEventMsg:
+		if msg.closed {
+			return m, nil
+		}
+		if m.agent.handle(msg) {
+			m.reloadKeepSelection()
+		}
+		if done, ok := msg.ev.(agent.EvDone); ok {
+			m.finishRun(msg.todoID, done)
+			return m, nil
+		}
+		if run := m.agent.conv(msg.todoID).run; run != nil {
+			return m, waitEvent(msg.todoID, run.Events)
+		}
+		return m, nil
+
+	case spinner.TickMsg:
+		if !m.agent.anyRunning() {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.agent.spin, cmd = m.agent.spin.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.notes.dirty() {
 				m.saveNotes() // don't lose edits on quit
 			}
+			m.agent.cancelAll()
 			return m, tea.Quit
 		}
 		m.status = ""
@@ -78,7 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Fast key repeat can arrive as one multi-rune message ("jjj");
 		// handle each rune as its own keypress.
-		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste {
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste && m.focus != focusAgent {
 			var model tea.Model = m
 			var cmds []tea.Cmd
 			for _, r := range msg.Runes {
@@ -90,13 +118,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q":
-			return m, tea.Quit
+			if m.focus != focusAgent {
+				m.agent.cancelAll()
+				return m, tea.Quit
+			}
 		case "tab":
-			m.focus = (m.focus + 1) % numFocus
-			return m, nil
+			return m, m.setFocus((m.focus + 1) % numFocus)
 		case "shift+tab":
-			m.focus = (m.focus + numFocus - 1) % numFocus
-			return m, nil
+			return m, m.setFocus((m.focus + numFocus - 1) % numFocus)
 		}
 		switch m.focus {
 		case focusList:
@@ -104,9 +133,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case focusNotes:
 			return m.updateNotes(msg)
 		case focusAgent:
-			if msg.String() == "esc" {
-				m.focus = focusList
-			}
+			return m.updateAgent(msg)
 		}
 	}
 	if m.modal == modalNew {
@@ -117,7 +144,134 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notes.ta, cmd = m.notes.ta.Update(msg)
 		return m, cmd
 	}
+	if m.focus == focusAgent {
+		var cmd tea.Cmd
+		m.agent.input, cmd = m.agent.input.Update(msg)
+		return m, cmd
+	}
 	return m, nil
+}
+
+// setFocus moves focus between panes, focusing the agent prompt input
+// when the agent pane is entered.
+func (m *Model) setFocus(f focus) tea.Cmd {
+	m.focus = f
+	if f == focusAgent {
+		return m.agent.input.Focus()
+	}
+	m.agent.input.Blur()
+	return nil
+}
+
+// syncSelection points the notes and agent panes at the selected todo.
+func (m *Model) syncSelection() {
+	t := m.list.selected()
+	m.notes.show(t)
+	if t != nil {
+		m.agent.show(t.ID)
+	} else {
+		m.agent.show("")
+	}
+}
+
+func (m Model) updateAgent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	t := m.list.selected()
+	switch msg.String() {
+	case "esc":
+		if t != nil && m.agent.running(t.ID) {
+			m.agent.conv(t.ID).run.Cancel()
+			return m, nil
+		}
+		return m, m.setFocus(focusList)
+	case "enter":
+		return m.sendPrompt()
+	case "up", "down", "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		var cmd tea.Cmd
+		m.agent.vp, cmd = m.agent.vp.Update(msg)
+		return m, cmd
+	}
+	var cmd tea.Cmd
+	m.agent.input, cmd = m.agent.input.Update(msg)
+	return m, cmd
+}
+
+// sendPrompt starts a Claude run for the selected todo.
+func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
+	t := m.list.selected()
+	text := strings.TrimSpace(m.agent.input.Value())
+	if t == nil || text == "" || m.agent.running(t.ID) {
+		return m, nil
+	}
+	m.agent.input.SetValue("")
+	c := m.agent.conv(t.ID)
+
+	if text == "/clear" {
+		c.entries = nil
+		if t.Session != "" {
+			if _, err := m.store.Update(t, func(t *store.Todo) { t.Session = "" }); err != nil {
+				m.setStatus("Couldn't clear session: "+err.Error(), true)
+			}
+			m.reloadKeepSelection()
+		}
+		m.agent.refresh()
+		m.setStatus("Started a new conversation for this todo", false)
+		return m, nil
+	}
+
+	// Make sure Claude sees the latest notes, and that we don't overwrite
+	// its edits from a stale editor buffer.
+	if m.notes.editing && m.notes.editID == t.ID {
+		if m.notes.dirty() && !m.saveNotes() {
+			return m, nil
+		}
+		m.notes.stopEdit()
+	}
+
+	c.add(entUser, text)
+	run, err := agent.Start(agent.Options{
+		Dir:          m.store.Dir,
+		Prompt:       text,
+		SystemPrompt: systemPrompt(t),
+		Session:      t.Session,
+	})
+	if err != nil {
+		c.add(entError, capitalize(err.Error()))
+		m.agent.refresh()
+		return m, nil
+	}
+	c.run, c.session, c.resumed = run, "", t.Session != ""
+	m.agent.refresh()
+	m.agent.vp.GotoBottom()
+	return m, tea.Batch(waitEvent(t.ID, run.Events), m.agent.spin.Tick)
+}
+
+// finishRun stores the session ID so the next prompt continues the same
+// conversation, or forgets it if it could not be resumed.
+func (m *Model) finishRun(todoID string, done agent.EvDone) {
+	var t *store.Todo
+	for _, x := range m.list.todos {
+		if x.ID == todoID {
+			t = x
+		}
+	}
+	if t == nil {
+		return
+	}
+	c := m.agent.conv(todoID)
+	session := c.session
+	if done.IsError && c.resumed && strings.Contains(strings.ToLower(done.Message), "no conversation found") {
+		session = ""
+		c.add(entInfo, "Previous conversation not found — the next message starts a new one.")
+		m.agent.refresh()
+	}
+	if session == t.Session || (session == "" && !c.resumed) {
+		return
+	}
+	if _, err := m.store.Update(t, func(t *store.Todo) { t.Session = session }); err != nil {
+		m.setStatus("Couldn't save agent session: "+err.Error(), true)
+		return
+	}
+	m.reloadKeepSelection()
 }
 
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -132,6 +286,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.list.bottom()
 	case "enter", "l", "right":
 		m.focus = focusNotes
+	case "a", "i":
+		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
 	case "n":
@@ -141,11 +297,15 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x", " ", "space":
 		m.toggleDone()
 	case "d":
-		if m.list.selected() != nil {
-			m.modal = modalDelete
+		if t := m.list.selected(); t != nil {
+			if m.agent.running(t.ID) {
+				m.setStatus("Claude is working on this todo — stop it first (esc in the agent pane)", true)
+			} else {
+				m.modal = modalDelete
+			}
 		}
 	}
-	m.notes.show(m.list.selected())
+	m.syncSelection()
 	return m, nil
 }
 
@@ -154,6 +314,8 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "h", "left":
 		m.focus = focusList
 		return m, nil
+	case "a", "i":
+		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
 	case "g", "home":
@@ -173,7 +335,11 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 	if t == nil {
 		return m, nil
 	}
-	m.focus = focusNotes
+	if m.agent.running(t.ID) {
+		m.setStatus("Claude is editing these notes — wait for it, or press esc in the agent pane to stop", true)
+		return m, nil
+	}
+	m.setFocus(focusNotes)
 	return m, m.notes.startEdit(t)
 }
 
@@ -293,7 +459,16 @@ func (m *Model) reload(selectID string) {
 		m.list.selectID(selectID)
 	}
 	m.notes.invalidate()
-	m.notes.show(m.list.selected())
+	m.syncSelection()
+}
+
+// reloadKeepSelection reloads from disk without moving the cursor.
+func (m *Model) reloadKeepSelection() {
+	id := ""
+	if t := m.list.selected(); t != nil {
+		id = t.ID
+	}
+	m.reload(id)
 }
 
 func capitalize(s string) string {
@@ -316,6 +491,7 @@ func (m *Model) layout() {
 	m.agentH = bodyH - m.notesH
 	m.list.setHeight(bodyH - 2)
 	m.notes.setSize(m.width-m.listW-2, m.notesH-2)
+	m.agent.setSize(m.width-m.listW-2, m.agentH-2)
 }
 
 func (m Model) View() string {
@@ -342,7 +518,11 @@ func (m Model) View() string {
 		}
 	}
 	notes := renderPane(notesTitle, m.notes.view(), rightW, m.notesH, m.focus == focusNotes)
-	agent := renderPane("Agent", m.agent.view(rightW-2, m.agentH-2, m.focus == focusAgent),
+	agentTitle := "Agent"
+	if t := m.list.selected(); t != nil && m.agent.running(t.ID) {
+		agentTitle = "Agent · working"
+	}
+	agent := renderPane(agentTitle, m.agent.view(rightW-2, m.agentH-2, m.focus == focusAgent),
 		rightW, m.agentH, m.focus == focusAgent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, lipgloss.JoinVertical(lipgloss.Left, notes, agent))

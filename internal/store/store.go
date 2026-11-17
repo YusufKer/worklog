@@ -37,6 +37,10 @@ type Store struct {
 }
 
 func New(dir string) (*Store, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
