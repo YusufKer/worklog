@@ -2,8 +2,10 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/yusuf/worklog/internal/agent"
+	"github.com/yusuf/worklog/internal/config"
 	"github.com/yusuf/worklog/internal/store"
 )
 
@@ -32,20 +35,25 @@ const (
 
 // Options configure the UI.
 type Options struct {
-	GlamStyle  string        // "dark" or "light", detected before the program starts
-	Agent      agent.Backend // the agent behind the agent pane
-	StaleAfter time.Duration // forgotten-timer threshold
+	GlamStyle     string // "dark" or "light", detected before the program starts
+	Config        config.Config
+	ConfigPath    string
+	DirOverridden bool // the data dir came from -dir, $WORKLOG_DIR or -demo
 }
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	store      *store.Store
-	backend    agent.Backend
-	staleAfter time.Duration
-	list       listModel
-	notes      notesModel
-	agent      agentModel
-	focus      focus
+	store         *store.Store
+	backend       agent.Backend
+	staleAfter    time.Duration
+	cfg           config.Config
+	cfgPath       string
+	dirOverridden bool
+	settings      settingsForm
+	list          listModel
+	notes         notesModel
+	agent         agentModel
+	focus         focus
 
 	modal modalKind
 	form  newTodoForm
@@ -64,13 +72,17 @@ type Model struct {
 
 // New builds the UI.
 func New(s *store.Store, todos []*store.Todo, o Options) Model {
+	backend := BackendFor(o.Config.Agent)
 	m := Model{
-		store:      s,
-		backend:    o.Agent,
-		staleAfter: o.StaleAfter,
-		notes:      newNotes(o.GlamStyle),
-		agent:      newAgent(o.GlamStyle, o.Agent.Name(), isClaude(o.Agent)),
-		kept:       map[string]bool{},
+		store:         s,
+		backend:       backend,
+		staleAfter:    o.Config.StaleAfter(),
+		cfg:           o.Config,
+		cfgPath:       o.ConfigPath,
+		dirOverridden: o.DirOverridden,
+		notes:         newNotes(o.GlamStyle),
+		agent:         newAgent(o.GlamStyle, backend.Name(), isClaude(backend)),
+		kept:          map[string]bool{},
 	}
 	m.list.setTodos(todos)
 	m.syncSelection()
@@ -249,6 +261,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stale.input, cmd = m.stale.input.Update(msg)
 		return m, cmd
 	}
+	if m.modal == modalSettings {
+		return m, m.settings.update(msg)
+	}
 	if m.notes.editing {
 		var cmd tea.Cmd
 		m.notes.ta, cmd = m.notes.ta.Update(msg)
@@ -408,6 +423,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startEdit()
 	case "t":
 		return m, m.toggleTimer()
+	case ",":
+		return m, m.openSettings()
 	case "n":
 		m.modal = modalNew
 		m.form = newForm()
@@ -438,6 +455,8 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startEdit()
 	case "t":
 		return m, m.toggleTimer()
+	case ",":
+		return m, m.openSettings()
 	case "g", "home":
 		m.notes.vp.GotoTop()
 		return m, nil
@@ -504,8 +523,125 @@ func (m *Model) saveNotes() bool {
 	return true
 }
 
+func (m *Model) openSettings() tea.Cmd {
+	m.settings = newSettings(m.cfg, m.cfgPath, m.dirOverridden)
+	m.modal = modalSettings
+	return m.settings.focusCurrent()
+}
+
+func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f := &m.settings
+	if f.raw {
+		switch msg.String() {
+		case "esc":
+			f.raw, f.err = false, ""
+			f.ta.Blur()
+			return m, f.focusCurrent()
+		case "ctrl+s":
+			data := []byte(f.ta.Value() + "\n")
+			cfg, err := config.Parse(data)
+			if err == nil {
+				err = m.applySettings(cfg, func() error { return config.SaveRaw(m.cfgPath, data) })
+			}
+			if err != nil {
+				f.err = capitalize(err.Error())
+				return m, nil
+			}
+			m.modal = modalNone
+			m.setStatus("Settings saved", false)
+			return m, nil
+		}
+		return m, f.update(msg)
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.modal = modalNone
+		return m, nil
+	case "enter":
+		cfg, err := f.config()
+		if err == nil {
+			err = m.applySettings(cfg, func() error { return config.Save(m.cfgPath, cfg) })
+		}
+		if err != nil {
+			f.err = capitalize(err.Error())
+			return m, nil
+		}
+		m.modal = modalNone
+		m.setStatus("Settings saved", false)
+		return m, nil
+	case "ctrl+e":
+		return m, f.startRaw(m.height - 16)
+	case "up", "shift+tab":
+		f.err = ""
+		return m, f.move(-1)
+	case "down", "tab":
+		f.err = ""
+		return m, f.move(1)
+	case "left", "right":
+		delta := 1
+		if msg.String() == "left" {
+			delta = -1
+		}
+		if f.cycle(delta) {
+			f.err = ""
+			return m, nil
+		}
+	}
+	f.err = ""
+	return m, f.update(msg)
+}
+
+// applySettings switches to the new settings. save is called once the new
+// settings are known to work, so a failed switch leaves the file untouched.
+func (m *Model) applySettings(cfg config.Config, save func() error) error {
+	var newStore *store.Store
+	var todos []*store.Todo
+	if !m.dirOverridden {
+		dir := cfg.Dir
+		if dir == "" {
+			dir = "~/worklog"
+		}
+		dir, err := filepath.Abs(config.ExpandHome(dir))
+		if err != nil {
+			return err
+		}
+		if dir != m.store.Dir {
+			if m.agent.anyRunning() {
+				return errors.New("an agent is still running — stop it before changing the data folder")
+			}
+			if newStore, err = store.New(dir); err != nil {
+				return err
+			}
+			if todos, err = newStore.LoadAll(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := save(); err != nil {
+		return err
+	}
+
+	m.cfg = cfg
+	m.staleAfter = cfg.StaleAfter()
+	m.backend = BackendFor(cfg.Agent)
+	m.agent.setBackend(m.backend.Name(), isClaude(m.backend))
+	if newStore != nil {
+		m.store = newStore
+		m.agent.convs = map[string]*conversation{}
+		m.kept = map[string]bool{}
+		m.list.cursor, m.list.offset = 0, 0
+		m.list.setTodos(todos)
+		m.notes.invalidate()
+		m.syncSelection()
+	}
+	return nil
+}
+
 func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.modal {
+	case modalSettings:
+		return m.updateSettings(msg)
 	case modalStaleTimer:
 		t, now := m.stale.todo, time.Now()
 		var err error
@@ -691,6 +827,8 @@ func (m Model) View() string {
 		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
 	case modalStaleTimer:
 		body = overlay(body, m.stale.view(time.Now()), m.width, bodyH)
+	case modalSettings:
+		body = overlay(body, m.settings.view(), m.width, bodyH)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, body, m.footer())
 }
@@ -741,6 +879,10 @@ func (m Model) footerLeft() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "create"}, {"esc", "cancel"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.modal == modalSettings && m.settings.raw:
+		return renderHelp([]hint{{"ctrl+s", "save"}, {"esc", "back to form"}})
+	case m.modal == modalSettings:
+		return renderHelp([]hint{{"↑/↓", "field"}, {"←/→", "change"}, {"enter", "save"}, {"ctrl+e", "edit raw TOML"}, {"esc", "cancel"}})
 	case m.modal == modalStaleTimer:
 		return renderHelp([]hint{{"enter", "stop at time"}, {"n", "stop now"}, {"k", "keep running"}, {"d", "discard"}})
 	case m.notes.editing:

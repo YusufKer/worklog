@@ -68,3 +68,64 @@ func TestExpandHome(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+func TestRenderRoundTrip(t *testing.T) {
+	for _, c := range []Config{
+		{},
+		{Dir: "~/notes", StaleTimerHours: 2.5, Agent: Agent{Type: "claude", Model: "haiku", ClaudePath: "/x/claude"}},
+		{Agent: Agent{Type: "command", Name: "codex", Command: []string{"codex", "exec", `say "{prompt}"`}}},
+	} {
+		got, err := Parse([]byte(Render(c)))
+		if err != nil {
+			t.Fatalf("parse rendered %+v: %v\n%s", c, err, Render(c))
+		}
+		if c.Agent.Type == "" {
+			c.Agent.Type = "claude" // Render writes the default explicitly
+		}
+		if got.Dir != c.Dir || got.StaleTimerHours != c.StaleTimerHours || got.Agent.Type != c.Agent.Type ||
+			got.Agent.Model != c.Agent.Model || got.Agent.ClaudePath != c.Agent.ClaudePath ||
+			got.Agent.Name != c.Agent.Name || strings.Join(got.Agent.Command, "|") != strings.Join(c.Agent.Command, "|") {
+			t.Errorf("round trip: got %+v, want %+v", got, c)
+		}
+	}
+}
+
+func TestSaveRejectsInvalid(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sub", "config.toml")
+	if err := SaveRaw(p, []byte("[agent]\ntype = \"nope\"\n")); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("invalid config must not be written")
+	}
+	if err := Save(p, Config{Agent: Agent{Model: "sonnet"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil || c.Agent.Model != "sonnet" {
+		t.Fatalf("load after save: %+v %v", c, err)
+	}
+}
+
+func TestSplitJoinArgs(t *testing.T) {
+	cases := map[string][]string{
+		`codex exec {prompt}`:           {"codex", "exec", "{prompt}"},
+		`aider --message "{message}" x`: {"aider", "--message", "{message}", "x"},
+		`sh -c 'echo "hi there"'`:       {"sh", "-c", `echo "hi there"`},
+		`a\ b  c`:                       {"a b", "c"},
+		`''`:                            {""},
+	}
+	for in, want := range cases {
+		got, err := SplitArgs(in)
+		if err != nil || strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("SplitArgs(%q) = %q, %v; want %q", in, got, err, want)
+		}
+		back, _ := SplitArgs(JoinArgs(want))
+		if strings.Join(back, "|") != strings.Join(want, "|") {
+			t.Errorf("JoinArgs round trip for %q gave %q", want, back)
+		}
+	}
+	if _, err := SplitArgs(`echo "oops`); err == nil {
+		t.Error("expected unclosed quote error")
+	}
+}

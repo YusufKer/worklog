@@ -9,7 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yusuf/worklog/internal/agent"
 	"github.com/yusuf/worklog/internal/config"
 	"github.com/yusuf/worklog/internal/store"
 	"github.com/yusuf/worklog/internal/ui"
@@ -65,17 +64,17 @@ func run(dirFlag, configPath string, demo bool) error {
 		return err
 	}
 
-	var backend agent.Backend = agent.Claude{Bin: config.ExpandHome(cfg.Agent.ClaudePath), Model: cfg.Agent.Model}
-	if cfg.Agent.Type == "command" {
-		backend = agent.Command{Label: cfg.Agent.Name, Argv: cfg.Agent.Command}
-	}
-
 	glamStyle := "light"
 	if lipgloss.HasDarkBackground() {
 		glamStyle = "dark"
 	}
 
-	m := ui.New(s, todos, ui.Options{GlamStyle: glamStyle, Agent: backend, StaleAfter: cfg.StaleAfter()})
+	m := ui.New(s, todos, ui.Options{
+		GlamStyle:     glamStyle,
+		Config:        cfg,
+		ConfigPath:    configPath,
+		DirOverridden: demo || dirFlag != "" || os.Getenv("WORKLOG_DIR") != "",
+	})
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }

@@ -101,6 +101,13 @@ func newAgent(glamStyle, name string, markdown bool) agentModel {
 	}
 }
 
+// setBackend updates labels after the agent is changed in settings.
+func (a *agentModel) setBackend(name string, markdown bool) {
+	a.name, a.markdown = name, markdown
+	a.input.Placeholder = "Ask " + name + " to research or edit these notes…"
+	a.refresh()
+}
+
 func (a *agentModel) conv(id string) *conversation {
 	c, ok := a.convs[id]
 	if !ok {

@@ -53,6 +53,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `enter` / `l` | go to notes |
 | | `q` | quit |
 | list, notes | `e` | edit notes inline |
+| | `,` | settings |
 | | `t` | start/stop the timer (one at a time) |
 | | `a` / `i` | ask the agent |
 | notes | `j`/`k`, `g`/`G` | scroll |
@@ -95,7 +96,12 @@ moved to `.trash/`.
 
 ## Configuration
 
-Optional, at `~/.config/worklog/config.toml` (or `-config path`):
+Press `,` for the settings screen: pick the agent and model, set the data
+folder and stale-timer threshold, or press `ctrl+e` to edit the raw TOML.
+Changes are validated, saved, and applied immediately (switching the data
+folder loads that folder's todos).
+
+Settings live in `~/.config/worklog/config.toml` (or `-config path`):
 
 ```toml
 # Where todos live. Overridden by -dir and $WORKLOG_DIR.
