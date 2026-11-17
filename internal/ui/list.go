@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/store"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/worklog/internal/store"
 )
 
 // listModel is the date-grouped todo list on the left.

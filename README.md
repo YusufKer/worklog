@@ -24,8 +24,8 @@ version) and, for the agent pane, [Claude Code](https://claude.com/claude-code)
 or another CLI agent.
 
 ```sh
-cd worklog
-go install .        # installs ~/go/bin/worklog
+go install github.com/YusufKer/worklog@latest   # installs ~/go/bin/worklog
+# or from a clone:  go install .
 worklog             # uses ~/worklog/
 worklog -demo       # try it on sample data in a temp directory
 ```
@@ -174,3 +174,7 @@ go run . -demo
 Code layout: `internal/store` (files, grouping, time tracking),
 `internal/agent` (Claude Code and command backends), `internal/config`,
 `internal/ui` (Bubble Tea panes).
+
+## License
+
+MIT

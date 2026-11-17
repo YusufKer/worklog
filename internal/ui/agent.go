@@ -5,14 +5,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/agent"
+	"github.com/YusufKer/worklog/internal/store"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/worklog/internal/agent"
-	"github.com/yusuf/worklog/internal/store"
 )
 
 type entryKind int

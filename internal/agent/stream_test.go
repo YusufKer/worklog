@@ -52,7 +52,7 @@ func TestParseFixture(t *testing.T) {
 		}
 	}
 
-	if session != "5abdb7b0-402a-4498-b30c-059010c758fc" {
+	if session != "00000000-0000-4000-8000-000000000001" {
 		t.Errorf("session = %q", session)
 	}
 	if got := text.String(); got != "I added \"- hello from agent\" to the end of `note.md`." {

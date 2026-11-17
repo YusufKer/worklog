@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/YusufKer/worklog/internal/agent"
+	"github.com/YusufKer/worklog/internal/config"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/worklog/internal/agent"
-	"github.com/yusuf/worklog/internal/config"
 )
 
 type settingField int

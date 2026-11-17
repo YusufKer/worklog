@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/worklog/internal/store"
 )
 
 type modalKind int

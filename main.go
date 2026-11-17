@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/config"
+	"github.com/YusufKer/worklog/internal/store"
+	"github.com/YusufKer/worklog/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yusuf/worklog/internal/config"
-	"github.com/yusuf/worklog/internal/store"
-	"github.com/yusuf/worklog/internal/ui"
 )
 
 func main() {

@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/agent"
+	"github.com/YusufKer/worklog/internal/config"
+	"github.com/YusufKer/worklog/internal/store"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yusuf/worklog/internal/agent"
-	"github.com/yusuf/worklog/internal/config"
-	"github.com/yusuf/worklog/internal/store"
 )
 
 type focus int

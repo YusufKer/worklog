@@ -1,4 +1,4 @@
-module github.com/yusuf/worklog
+module github.com/YusufKer/worklog
 
 go 1.24.2
 

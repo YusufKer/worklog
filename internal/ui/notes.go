@@ -3,12 +3,12 @@ package ui
 import (
 	"strings"
 
+	"github.com/YusufKer/worklog/internal/store"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yusuf/worklog/internal/store"
 )
 
 // notesModel renders the selected todo's Markdown notes in a scrollable
