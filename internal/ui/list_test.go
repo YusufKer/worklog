@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/YusufKer/worklog/internal/config"
 	"github.com/YusufKer/worklog/internal/store"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestListFilter(t *testing.T) {
@@ -51,5 +53,32 @@ func TestListFilter(t *testing.T) {
 	l.clearFilter()
 	if got := ids(l); got != "abc" || l.filtered() {
 		t.Fatalf("after clearFilter: %q", got)
+	}
+}
+
+// Fast typing arrives as one multi-rune message; words that are also key
+// names ("end", "home") must still be typed, not treated as keys.
+func TestFastTypingIntoInputs(t *testing.T) {
+	m := New(nil, nil, Options{Config: config.Config{Agent: config.Agent{Type: "claude"}}})
+	m.width, m.height = 100, 30
+	m.layout()
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	for _, chunk := range []string{"the ", "end"} {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chunk)})
+	}
+	if got := model.(Model).list.filter.Value(); got != "the end" {
+		t.Fatalf("filter = %q", got)
+	}
+
+	m = model.(Model)
+	m.list.clearQuery()
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	for _, chunk := range []string{"go ", "home"} {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chunk)})
+	}
+	if got := model.(Model).agent.input.Value(); got != "go home" {
+		t.Fatalf("agent input = %q", got)
 	}
 }

@@ -215,6 +215,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.agent.cancelAll()
 			return m, tea.Quit
 		}
+		// Fast typing or key repeat can arrive as one multi-rune message
+		// ("jjj"); handle each rune as its own keypress. Text inputs need
+		// this too: their key bindings match the whole message, so typing
+		// "end" quickly would otherwise move the cursor instead.
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste {
+			var model tea.Model = m
+			var cmds []tea.Cmd
+			for _, r := range msg.Runes {
+				var cmd tea.Cmd
+				model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+				cmds = append(cmds, cmd)
+			}
+			return model, tea.Batch(cmds...)
+		}
 		m.status = ""
 		if m.modal != modalNone {
 			return m.updateModal(msg)
@@ -224,18 +238,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.list.typing {
 			return m.updateFilter(msg)
-		}
-		// Fast key repeat can arrive as one multi-rune message ("jjj");
-		// handle each rune as its own keypress.
-		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste && m.focus != focusAgent {
-			var model tea.Model = m
-			var cmds []tea.Cmd
-			for _, r := range msg.Runes {
-				var cmd tea.Cmd
-				model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-				cmds = append(cmds, cmd)
-			}
-			return model, tea.Batch(cmds...)
 		}
 		switch msg.String() {
 		case "q":

@@ -95,4 +95,15 @@ func TestArgs(t *testing.T) {
 			t.Errorf("args missing %q: %s", want, args)
 		}
 	}
+
+	// Resumed runs name the current notes file in the message; new ones
+	// rely on the system prompt.
+	resumed := Claude{}.Args(Options{Message: "hi", Session: "abc", NotesFile: "/d/2026-11-19-x.md"})
+	if resumed[1] != "[Notes file: /d/2026-11-19-x.md]\n\nhi" {
+		t.Errorf("resumed message = %q", resumed[1])
+	}
+	fresh := Claude{}.Args(Options{Message: "hi", NotesFile: "/d/2026-11-19-x.md"})
+	if fresh[1] != "hi" {
+		t.Errorf("new message = %q", fresh[1])
+	}
 }

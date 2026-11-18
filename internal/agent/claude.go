@@ -27,8 +27,15 @@ func (c Claude) Resumable() bool { return true }
 
 // Args builds the claude command-line arguments.
 func (c Claude) Args(o Options) []string {
+	msg := o.Message
+	if o.Session != "" && o.NotesFile != "" {
+		// A resumed session remembers the notes path from earlier turns, but
+		// the file is renamed when the todo is renamed or rescheduled. Put the
+		// current path in the newest turn so it wins over the history.
+		msg = "[Notes file: " + o.NotesFile + "]\n\n" + msg
+	}
 	args := []string{
-		"-p", o.Message,
+		"-p", msg,
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
