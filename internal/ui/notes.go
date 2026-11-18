@@ -146,6 +146,19 @@ func (n *notesModel) startEdit(t *store.Todo) tea.Cmd {
 	return cmd
 }
 
+// movePage moves the cursor a screenful of lines up (dir < 0) or down
+// (dir > 0). The keys go through the textarea so it keeps the cursor's
+// column and scrolls to follow it, as it does for plain up/down.
+func (n *notesModel) movePage(dir int) {
+	key := tea.KeyMsg{Type: tea.KeyDown}
+	if dir < 0 {
+		key = tea.KeyMsg{Type: tea.KeyUp}
+	}
+	for i := 0; i < max(n.ta.Height()-1, 1); i++ {
+		n.ta, _ = n.ta.Update(key)
+	}
+}
+
 func (n *notesModel) stopEdit() {
 	n.editing = false
 	n.editID = ""

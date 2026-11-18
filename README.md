@@ -33,9 +33,11 @@ worklog -demo       # try it on sample data in a temp directory
 ## Layout
 
 - **Todos** (left): grouped by date, newest first. Unfinished todos from
-  earlier days are carried over into **Today** (`↩ Nov 14`); their date in
-  the file doesn't change. Each row shows the todo's tracked time or its
-  live timer; each date header shows the hours worked that day.
+  earlier days are carried over into **Today** under a *Carried over*
+  divider (`↩ Nov 14`); their date in the file doesn't change, and `J`/`K`
+  only reorder todos within their own day. Each row shows the todo's
+  tracked time or its live timer; each date header shows the hours worked
+  that day.
 - **Notes** (top right, 67%): the selected todo's Markdown notes.
 - **Agent** (bottom right, 33%): chat with your agent about the selected todo.
   Each todo has its own conversation, kept in `.chats/` in the data folder so
@@ -48,6 +50,7 @@ worklog -demo       # try it on sample data in a temp directory
 | everywhere | `tab` / `shift+tab` | switch pane |
 | | `ctrl+c` | quit (saves unsaved notes) |
 | list | `j`/`k`, `↑`/`↓`, `g`/`G` | move, top, bottom |
+| | `J`/`K` | move the todo down/up within its day (new todos start at the top) |
 | | `n` | new todo (title + date, default today) |
 | | `r` | rename or reschedule (renames the file to match) |
 | | `/` | search titles and notes (`enter` keeps the filter, `esc` clears) |
@@ -59,6 +62,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `enter` / `l` | go to notes |
 | | `q` | quit |
 | list, notes | `e` | edit notes inline |
+| | `E` | open the todo's file in `$VISUAL` or `$EDITOR` (e.g. `vim`, `code --wait`) |
 | | `,` | settings |
 | | `?` | show all keys |
 | | `t` | start/stop the timer (one at a time) |
@@ -69,6 +73,9 @@ worklog -demo       # try it on sample data in a temp directory
 | | `esc` / `h` | back to list |
 | editing | `esc` | save and stop editing |
 | | `ctrl+s` | save |
+| | `pgup`/`pgdn` (`fn+↑`/`fn+↓` on a Mac) | move a screenful up/down |
+| | `home`/`end` (`fn+←`/`fn+→` on a Mac) | jump to the top/bottom of the note |
+| | `ctrl+a`/`ctrl+e` | start/end of the line |
 | agent | `enter` | send |
 | | `esc` | stop a running agent, otherwise back to list |
 | | `↑`/`↓`, `pgup`/`pgdn` | scroll the conversation |
@@ -85,7 +92,17 @@ The week report shows time per todo and day (Monday–Sunday). `s` saves it
 as CSV in decimal hours to `reports/2026-W47.csv` in the data folder; `c`
 copies it as a Markdown table.
 
-From the command line, `worklog report` prints a week as Markdown, or CSV
+From the command line, `worklog add` creates a todo without opening the
+app and prints its file. `-date` takes the same shortcuts as the app;
+`-notes` sets the notes, or reads them from stdin with `-notes -`:
+
+```sh
+worklog add Call the bank
+worklog add -date tomorrow "Review search PR"
+pbpaste | worklog add -notes - Call supplier
+```
+
+`worklog report` prints a week as Markdown, or CSV
 with `-csv`. `-week` takes `this` (default), `last`, `-N` weeks ago, an ISO
 week like `2026-W47`, or any date in the week. `-dir` and `-config` work as
 they do for the app:
@@ -111,6 +128,7 @@ date: "2026-11-17"
 done: false
 created: 2026-11-17T09:12:00+02:00
 session: 257a9a5f-…            # agent conversation to resume
+order: 2                       # position within its day, set by J/K
 time:
     - start: 2026-11-17T09:12:00+02:00
       end: 2026-11-17T10:32:00+02:00

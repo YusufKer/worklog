@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type Todo struct {
 	Done    bool        `yaml:"done"`
 	Created time.Time   `yaml:"created,omitempty"`
 	Session string      `yaml:"session,omitempty"`
+	Order   int         `yaml:"order,omitempty"` // manual position within its day, 1-based; 0 = unordered (newest first)
 	Time    []TimeEntry `yaml:"time,omitempty"`
 
 	Notes string `yaml:"-"`
@@ -82,14 +84,59 @@ func (s *Store) LoadAll() (todos []*Todo, bad []BadFile, err error) {
 	return todos, bad, nil
 }
 
-// Sort orders todos by date (newest first), then creation time (newest first).
+// Sort orders todos by date (newest first). Within a day, todos without an
+// order come first, newest created first, so a new todo lands at the top;
+// ordered ones follow by their order (see Reorder).
 func Sort(todos []*Todo) {
 	sort.SliceStable(todos, func(i, j int) bool {
-		if todos[i].Date != todos[j].Date {
-			return todos[i].Date > todos[j].Date
+		a, b := todos[i], todos[j]
+		if a.Date != b.Date {
+			return a.Date > b.Date
 		}
-		return todos[i].Created.After(todos[j].Created)
+		if (a.Order == 0) != (b.Order == 0) {
+			return a.Order == 0
+		}
+		if a.Order != b.Order {
+			return a.Order < b.Order
+		}
+		return a.Created.After(b.Created)
 	})
+}
+
+// Reorder stores the given sequence as the manual order of those todos,
+// which must share a date. Only todos whose order changes are written.
+func (s *Store) Reorder(seq []*Todo) error {
+	for i, t := range seq {
+		if t.Order == i+1 {
+			continue
+		}
+		if _, err := s.Update(t, func(x *Todo) { x.Order = i + 1 }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ResolveDate expands today, tomorrow, yesterday and +N/-N (days from
+// today) into YYYY-MM-DD. Anything else is returned trimmed, for the store
+// to validate.
+func ResolveDate(s string, now time.Time) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	days := 0
+	switch s {
+	case "", "today", "tod":
+	case "tomorrow", "tom":
+		days = 1
+	case "yesterday":
+		days = -1
+	default:
+		n, err := strconv.Atoi(s)
+		if err != nil || (s[0] != '+' && s[0] != '-') {
+			return s
+		}
+		days = n
+	}
+	return now.AddDate(0, 0, days).Format(DateLayout)
 }
 
 // Load parses a single todo file.
@@ -198,6 +245,9 @@ func (s *Store) Edit(t *Todo, title, date string) (*Todo, error) {
 	}
 	fresh, err := s.Update(t, func(x *Todo) {
 		x.Title = title
+		if x.Date != date {
+			x.Order = 0 // a rescheduled todo joins its new day at the top
+		}
 		x.Date = date
 	})
 	if err != nil {

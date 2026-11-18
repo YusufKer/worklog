@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -395,5 +396,57 @@ func TestDateLabelAcrossDST(t *testing.T) {
 		if got := DateLabel(c.date, now); got != c.want {
 			t.Errorf("DateLabel(%s, now=%s) = %q, want %q", c.date, c.now, got, c.want)
 		}
+	}
+}
+
+func TestSortAndReorder(t *testing.T) {
+	s, _ := New(t.TempDir())
+	var day []*Todo
+	for _, title := range []string{"A", "B", "C"} {
+		td, err := s.Create(title, "2026-11-18")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Created is truncated to seconds; make it strictly increasing.
+		td, _ = s.Update(td, func(x *Todo) { x.Created = x.Created.Add(time.Duration(len(day)) * time.Minute) })
+		day = append(day, td)
+	}
+	other, _ := s.Create("Other day", "2026-11-17")
+	titles := func() (out []string) {
+		todos, _, err := s.LoadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, td := range todos {
+			out = append(out, td.Title)
+		}
+		return out
+	}
+	if got := titles(); strings.Join(got, "") != "CBAOther day" {
+		t.Fatalf("unordered todos should be newest first, got %v", got)
+	}
+
+	// Move A to the top: the day becomes A C B.
+	if err := s.Reorder([]*Todo{day[0], day[2], day[1]}); err != nil {
+		t.Fatal(err)
+	}
+	if got := titles(); strings.Join(got, "") != "ACBOther day" {
+		t.Fatalf("after reorder got %v", got)
+	}
+	todos, _, _ := s.LoadAll()
+	if todos[0].Order != 1 || todos[1].Order != 2 || todos[2].Order != 3 || todos[3].Order != 0 {
+		t.Fatalf("order fields = %d %d %d %d", todos[0].Order, todos[1].Order, todos[2].Order, todos[3].Order)
+	}
+
+	// A new todo goes to the top of its day; a rescheduled one too (both
+	// unordered, so newest created first).
+	if _, err := s.Create("D", "2026-11-18"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Edit(other, other.Title, "2026-11-18"); err != nil {
+		t.Fatal(err)
+	}
+	if got := titles(); strings.Join(got, "|") != "D|Other day|A|C|B" {
+		t.Fatalf("after new and rescheduled todos got %v", got)
 	}
 }

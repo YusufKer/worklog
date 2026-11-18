@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -66,27 +65,8 @@ func editForm(t *store.Todo) todoForm {
 	return f
 }
 
-// resolveDate expands today, tomorrow, yesterday and +N/-N (days from
-// today) into YYYY-MM-DD. Anything else is returned trimmed, for the store
-// to validate.
-func resolveDate(s string, now time.Time) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	days := 0
-	switch s {
-	case "", "today", "tod":
-	case "tomorrow", "tom":
-		days = 1
-	case "yesterday":
-		days = -1
-	default:
-		n, err := strconv.Atoi(s)
-		if err != nil || (s[0] != '+' && s[0] != '-') {
-			return s
-		}
-		days = n
-	}
-	return now.AddDate(0, 0, days).Format(store.DateLayout)
-}
+// resolveDate expands date shortcuts; see store.ResolveDate.
+func resolveDate(s string, now time.Time) string { return store.ResolveDate(s, now) }
 
 func (f *todoForm) switchField() {
 	f.field = 1 - f.field

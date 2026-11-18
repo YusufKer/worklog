@@ -37,7 +37,7 @@ type keySection struct {
 // Every key, for the ? overlay, in two columns.
 var keysLeft = []keySection{
 	{"List", []hint{
-		{"j/k ↑/↓", "move"}, {"g/G", "top/bottom"}, {"n", "new todo"}, {"r", "rename/reschedule"},
+		{"j/k ↑/↓", "move"}, {"g/G", "top/bottom"}, {"J/K", "reorder within the day"}, {"n", "new todo"}, {"r", "rename/reschedule"},
 		{"x space", "toggle done"}, {"d", "delete"}, {"u", "trash / restore"}, {"/", "search"}, {".", "hide done"},
 		{"esc", "clear filter"}, {"enter l", "go to notes"}, {"q", "quit"},
 	}},
@@ -46,9 +46,9 @@ var keysLeft = []keySection{
 
 var keysRight = []keySection{
 	{"List and notes", []hint{
-		{"e", "edit notes"}, {"t", "start/stop timer"}, {"T", "time entries"}, {"W", "week report"}, {"a i", "ask the agent"}, {",", "settings"}, {"?", "this help"},
+		{"e", "edit notes"}, {"E", "open in $EDITOR"}, {"t", "start/stop timer"}, {"T", "time entries"}, {"W", "week report"}, {"a i", "ask the agent"}, {",", "settings"}, {"?", "this help"},
 	}},
-	{"Editing notes", []hint{{"esc", "save and close"}, {"ctrl+s", "save"}}},
+	{"Editing notes", []hint{{"esc", "save and close"}, {"ctrl+s", "save"}, {"pgup pgdn", "page up/down"}, {"home end", "top/bottom"}}},
 	{"Agent", []hint{{"enter", "send"}, {"esc", "stop / back"}, {"↑/↓ pgup", "scroll"}, {"/clear", "new chat"}}},
 	{"Everywhere", []hint{{"tab", "next pane"}, {"ctrl+c", "quit"}}},
 }

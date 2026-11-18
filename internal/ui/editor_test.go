@@ -37,6 +37,14 @@ func press(m Model, keys ...string) Model {
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "ctrl+s":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+		case "pgup":
+			msg = tea.KeyMsg{Type: tea.KeyPgUp}
+		case "pgdown":
+			msg = tea.KeyMsg{Type: tea.KeyPgDown}
+		case "home":
+			msg = tea.KeyMsg{Type: tea.KeyHome}
+		case "end":
+			msg = tea.KeyMsg{Type: tea.KeyEnd}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -216,5 +224,41 @@ func TestSettingsSwitchStartsTimerTick(t *testing.T) {
 	}
 	if cmd := m.settingsSaved(); cmd == nil || !m.ticking || m.store.Dir != other.Dir {
 		t.Fatalf("cmd %v ticking %v dir %s", cmd != nil, m.ticking, m.store.Dir)
+	}
+}
+
+// Page keys move the cursor a screenful at a time and home/end jump to the
+// ends of the note, without changing the text.
+func TestEditorPaging(t *testing.T) {
+	s, _ := store.New(t.TempDir())
+	td, _ := s.Create("Long", "2026-11-18")
+	notes := strings.Repeat("line\n", 100)
+	if _, err := s.Update(td, func(t *store.Todo) { t.Notes = notes }); err != nil {
+		t.Fatal(err)
+	}
+	m := openModel(t, s)
+	m = press(m, "e")
+	page := m.notes.ta.Height() - 1
+	if page < 2 {
+		t.Fatalf("editor only %d lines high", page+1)
+	}
+	m = press(m, "pgdown")
+	if got := m.notes.ta.Line(); got != page {
+		t.Fatalf("after pgdown on line %d, want %d", got, page)
+	}
+	m = press(m, "pgdown", "pgup")
+	if got := m.notes.ta.Line(); got != page {
+		t.Fatalf("after pgdown pgup on line %d, want %d", got, page)
+	}
+	m = press(m, "end")
+	if got, last := m.notes.ta.Line(), m.notes.ta.LineCount()-1; got != last {
+		t.Fatalf("after end on line %d, want %d", got, last)
+	}
+	m = press(m, "home")
+	if got := m.notes.ta.Line(); got != 0 {
+		t.Fatalf("after home on line %d, want 0", got)
+	}
+	if m.notes.dirty() {
+		t.Fatal("moving around marked the notes dirty")
 	}
 }

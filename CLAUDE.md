@@ -14,13 +14,14 @@ go vet ./...
 go run . -demo                     # run against a temp dir seeded with sample todos (see seedDemo in main.go)
 go run . -dir /tmp/wl -config /tmp/wl.toml    # isolate from the real ~/worklog and ~/.config/worklog
 go run . report -week last -csv -dir /tmp/wl  # CLI report (report.go)
+go run . add -dir /tmp/wl -date tomorrow Call the bank   # CLI add (add.go); notes via -notes, or -notes - for stdin
 ```
 
 UI tests in `internal/ui` drive `Model.Update` directly (e.g. `TestFastTypingIntoInputs`); rendering and layout are checked by running the app, e.g. `-demo` in tmux and `tmux capture-pane -p`. Avoid running against the user's real `~/worklog` data when testing.
 
 ## Architecture
 
-`main.go` resolves the data dir (precedence: `-demo` > `-dir` > `$WORKLOG_DIR` > config `dir` > `~/worklog`), loads todos, and starts `ui.Model`. `DirOverridden` tells the settings screen the dir can't be changed in-app.
+`main.go` resolves the data dir (precedence: `-demo` > `-dir` > `$WORKLOG_DIR` > config `dir` > `~/worklog`), loads todos, and starts `ui.Model`. `DirOverridden` tells the settings screen the dir can't be changed in-app. Subcommands (`report`, `add`) are dispatched from the `subcommands` table before flag parsing; each parses its own flags.
 
 ### internal/store — the files are the database
 - `.trash/` holds deleted todos and timestamped conflict backups (`Backup`); names never overwrite (`uniqueFile` adds `-2`, `-3`, …). `Restore` gives a todo a new ID, and drops its session and time entries, if its ID is already in use.
@@ -30,6 +31,7 @@ UI tests in `internal/ui` drive `Model.Update` directly (e.g. `TestFastTypingInt
 - `Save` is atomic (temp file + rename). **Mutations go through `Store.Update(t, fn)`**, which re-reads from disk before applying `fn`, because the agent edits the same files concurrently. Don't write a stale in-memory `Todo` back with `Save` directly.
 - `Edit` (rename/reschedule) renames the file to `date-slug.md` but keeps the `id`; UI state (agent conversations, editor) is keyed by ID, not path. Delete moves files to `.trash/`.
 - `GroupByDate` builds the list's date groups; unfinished todos from earlier days are *displayed* under Today (`Group.Carried`) without changing their `date`.
+- `Sort` orders a day by `order` (1-based, set by `Reorder`; `J`/`K` in the UI), with unordered todos (`order` 0, i.e. new ones) first, newest first. `Edit` clears `order` when the date changes. `listModel.reordered` only moves among todos sharing the selected todo's `date`, so carried-over todos stay put; `rows()` inserts a "Carried over" sub-header (`listRow.sub`) before them.
 - `timer.go`: time entries live in frontmatter `time:`; an open entry (no `end`) is the running timer. Only one runs at a time (`StartTimer` stops others). Totals split entries across midnight (`splitDays`). `Stale` drives the startup "forgotten timer" modal. Entries are identified by their `Start` (`PutTimeEntry`/`DeleteTimeEntry`), not by index, because `Update` re-reads the file.
 
 - `report.go`: `BuildWeek` totals time per todo per day (via `ByDay`, so entries crossing midnight split correctly) and renders Markdown/CSV. Reports are saved under `reports/`; `LoadAll` only globs top-level `*.md`, so subfolders are safe.
@@ -51,6 +53,7 @@ TOML at `~/.config/worklog/config.toml`. `Render` writes a commented file (not p
 - The textarea expands tabs to spaces; `notesModel.tabLines` maps untouched lines back on save, `original` is the textarea's value (not the raw notes) so opening the editor isn't a change, and notes over `maxEditLines` can't be opened. If the todo vanishes mid-edit, `stashNotes` writes the buffer to `.trash/`.
 - Modals that act on a todo remember its ID (`deleteID`) rather than using the current selection, since a poll can reload the list while they're open.
 - `systemPrompt()` in ui/agent.go is the context given to the agent (todo, notes path, "don't touch frontmatter").
+- `E` (external.go) runs `$VISUAL`/`$EDITOR` on the todo's file via `tea.ExecProcess`; `editorDoneMsg` reloads.
 - `applySettings` validates a new config (including loading a new data dir) before saving, then swaps backend/store live.
 - `watch.go` polls the data dir every 2s (size + mtime of top-level `*.md`) and reloads on any change, including the app's own writes; a baseline is taken in `New` and on data-dir switches. `saveNotes` backs up the on-disk version to `.trash/` if it changed since editing started (`notesModel.base`).
 - A 1s `timerTick` loop runs only while a timer is running (`ensureTick`).

@@ -215,6 +215,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case filesMsg:
 		return m.handleFiles(msg)
 
+	case editorDoneMsg:
+		m.reloadKeepSelection()
+		if msg.err != nil {
+			m.setStatus("Editor: "+msg.err.Error(), true)
+		}
+		return m, m.ensureTick()
+
 	case timerTickMsg:
 		if m.runningTodo() == nil {
 			m.ticking = false
@@ -480,6 +487,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.list.move(1)
 	case "k", "up":
 		m.list.move(-1)
+	case "J":
+		m.reorder(1)
+	case "K":
+		m.reorder(-1)
 	case "g", "home":
 		m.list.top()
 	case "G", "end":
@@ -490,6 +501,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
+	case "E":
+		return m.openExternal()
 	case "t":
 		return m, m.toggleTimer()
 	case ",":
@@ -557,6 +570,8 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.setFocus(focusAgent)
 	case "e":
 		return m.startEdit()
+	case "E":
+		return m.openExternal()
 	case "t":
 		return m, m.toggleTimer()
 	case ",":
@@ -611,6 +626,20 @@ func (m Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.saveNotes() {
 			m.setStatus("Saved", false)
 		}
+		return m, nil
+	case "pgup":
+		m.notes.movePage(-1)
+		return m, nil
+	case "pgdown":
+		m.notes.movePage(1)
+		return m, nil
+	// home/end jump to the ends of the note (fn+←/→ on a Mac, as in native
+	// macOS text fields); ctrl+a/ctrl+e still go to the ends of the line.
+	case "home":
+		m.notes.ta, _ = m.notes.ta.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+		return m, nil
+	case "end":
+		m.notes.ta, _ = m.notes.ta.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -1101,6 +1130,21 @@ func (m *Model) toggleDone() {
 	m.reload(t.ID)
 }
 
+// reorder moves the selected todo one visible place up (delta < 0) or down
+// within its day and stores the day's new order.
+func (m *Model) reorder(delta int) {
+	seq := m.list.reordered(delta)
+	if seq == nil {
+		return
+	}
+	id := m.list.selected().ID
+	if err := m.store.Reorder(seq); err != nil {
+		m.setStatus("Couldn't reorder: "+err.Error(), true)
+		return
+	}
+	m.reload(id)
+}
+
 func (m *Model) deleteTodo(t *store.Todo) {
 	if err := m.store.Delete(t); err != nil {
 		m.setStatus("Couldn't delete: "+err.Error(), true)
@@ -1330,7 +1374,7 @@ func (m Model) footerLeft() string {
 	case m.list.typing:
 		return renderHelp([]hint{{"enter", "keep filter"}, {"↑/↓", "move"}, {"esc", "clear"}})
 	case m.notes.editing:
-		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"ctrl+c", "save & quit"}})
+		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"pgup/pgdn", "page"}, {"home/end", "top/bottom"}, {"ctrl+c", "save & quit"}})
 	}
 	return renderHelp(helpFor(m.focus))
 }

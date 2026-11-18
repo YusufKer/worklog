@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +38,7 @@ func newList() listModel {
 type listRow struct {
 	header  string
 	date    string // group date, for headers
+	sub     string // sub-header within a group (the carried-over divider)
 	todo    int    // index into todos, -1 for headers/spacers
 	carried bool
 }
@@ -112,6 +115,44 @@ func matches(t *store.Todo, terms []string) bool {
 	return true
 }
 
+// reordered returns the selected todo's day (every todo with its date, in
+// current order) with the selected one moved past its nearest visible
+// neighbour in direction delta, or nil if there is nowhere to go. Carried-over
+// todos have other dates, so a todo can't be moved among them.
+func (l *listModel) reordered(delta int) []*store.Todo {
+	sel := l.selected()
+	if sel == nil {
+		return nil
+	}
+	visible := map[string]bool{}
+	for _, t := range l.todos {
+		visible[t.ID] = true
+	}
+	var day []*store.Todo
+	from := -1
+	for _, t := range l.all {
+		if t.Date != sel.Date {
+			continue
+		}
+		if t.ID == sel.ID {
+			from = len(day)
+		}
+		day = append(day, t)
+	}
+	to := -1
+	for j := from + delta; j >= 0 && j < len(day); j += delta {
+		if visible[day[j].ID] {
+			to = j
+			break
+		}
+	}
+	if from < 0 || to < 0 {
+		return nil
+	}
+	seq := slices.Delete(slices.Clone(day), from, from+1)
+	return slices.Insert(seq, to, sel)
+}
+
 func (l *listModel) selected() *store.Todo {
 	if len(l.todos) == 0 {
 		return nil
@@ -150,8 +191,22 @@ func (l *listModel) rows() []listRow {
 			rows = append(rows, listRow{todo: -1})
 		}
 		rows = append(rows, listRow{header: g.Label, date: g.Date, todo: -1})
+		divided := false
 		for _, t := range g.Todos {
-			rows = append(rows, listRow{todo: i, carried: g.Carried(t)})
+			carried := g.Carried(t)
+			if carried && !divided {
+				// Carried-over todos keep their own dates, so they can't be
+				// reordered with today's; a divider shows where that starts.
+				n := 0
+				for _, x := range g.Todos {
+					if g.Carried(x) {
+						n++
+					}
+				}
+				rows = append(rows, listRow{sub: fmt.Sprintf("↩ Carried over · %d", n), todo: -1})
+				divided = true
+			}
+			rows = append(rows, listRow{todo: i, carried: carried})
 			i++
 		}
 	}
@@ -172,7 +227,7 @@ func (l *listModel) scroll() {
 	if cursorRow < l.offset {
 		l.offset = cursorRow
 	}
-	if cursorRow > 0 && rows[cursorRow-1].header != "" && cursorRow-1 < l.offset {
+	if cursorRow > 0 && (rows[cursorRow-1].header != "" || rows[cursorRow-1].sub != "") && cursorRow-1 < l.offset {
 		l.offset = cursorRow - 1
 	}
 	h := l.rowsHeight()
@@ -211,6 +266,9 @@ func (l listModel) view(width int, focused bool) string {
 
 func (l listModel) renderRow(r listRow, width int, focused bool, now time.Time) string {
 	if r.todo < 0 {
+		if r.sub != "" {
+			return styleMuted.Render(" " + r.sub)
+		}
 		if r.header == "" {
 			return ""
 		}

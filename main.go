@@ -15,23 +15,38 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "report" {
-		if err := report(os.Args[2:], os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "worklog report:", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		if sub, ok := subcommands[os.Args[1]]; ok {
+			if err := sub(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "worklog "+os.Args[1]+":", err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 
 	dirFlag := flag.String("dir", "", "data directory (overrides $WORKLOG_DIR and the config file)")
 	configFlag := flag.String("config", config.DefaultPath(), "config file")
 	demo := flag.Bool("demo", false, "run against a temporary directory seeded with sample todos")
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), `Usage: worklog [flags]             open the app
+       worklog add [flags] title   add a todo (worklog add -h)
+       worklog report [flags]      print a week's time report (worklog report -h)
+`)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if err := run(*dirFlag, *configFlag, *demo); err != nil {
 		fmt.Fprintln(os.Stderr, "worklog:", err)
 		os.Exit(1)
 	}
+}
+
+// subcommands run without the UI: worklog <name> [flags].
+var subcommands = map[string]func(args []string) error{
+	"report": func(args []string) error { return report(args, os.Stdout) },
+	"add":    func(args []string) error { return add(args, os.Stdin, os.Stdout) },
 }
 
 func run(dirFlag, configPath string, demo bool) error {
