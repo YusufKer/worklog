@@ -126,12 +126,9 @@ func Parse(data []byte) (*Todo, error) {
 
 // Create makes a new todo for the given date and writes it to disk.
 func (s *Store) Create(title, date string) (*Todo, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return nil, fmt.Errorf("title is required")
-	}
-	if _, err := time.Parse(DateLayout, date); err != nil {
-		return nil, fmt.Errorf("date must be YYYY-MM-DD")
+	title, err := validate(title, date)
+	if err != nil {
+		return nil, err
 	}
 	slug := Slugify(title)
 	t := &Todo{
@@ -145,6 +142,56 @@ func (s *Store) Create(title, date string) (*Todo, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// Edit changes a todo's title and date, renaming its file to match. The ID
+// is kept, so the agent conversation and session stay attached.
+func (s *Store) Edit(t *Todo, title, date string) (*Todo, error) {
+	title, err := validate(title, date)
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := s.Update(t, func(x *Todo) {
+		x.Title = title
+		x.Date = date
+	})
+	if err != nil {
+		return nil, err
+	}
+	base := date + "-" + Slugify(title)
+	if hasBase(filepath.Base(fresh.Path), base) {
+		return fresh, nil
+	}
+	path := s.uniquePath(base)
+	if err := os.Rename(fresh.Path, path); err != nil {
+		return nil, err
+	}
+	fresh.Path = path
+	return fresh, nil
+}
+
+func validate(title, date string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", fmt.Errorf("title is required")
+	}
+	if _, err := time.Parse(DateLayout, date); err != nil {
+		return "", fmt.Errorf("date must be YYYY-MM-DD")
+	}
+	return title, nil
+}
+
+// hasBase reports whether name is base.md or a uniquePath variant of it.
+func hasBase(name, base string) bool {
+	if name == base+".md" {
+		return true
+	}
+	rest, ok := strings.CutPrefix(name, base+"-")
+	if !ok {
+		return false
+	}
+	n, ok := strings.CutSuffix(rest, ".md")
+	return ok && n != "" && strings.Trim(n, "0123456789") == ""
 }
 
 func (s *Store) uniquePath(base string) string {

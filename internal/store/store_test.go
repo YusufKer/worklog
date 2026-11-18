@@ -124,3 +124,43 @@ func TestCreateToggleDelete(t *testing.T) {
 		t.Fatal("expected error for bad date")
 	}
 }
+
+func TestEdit(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+
+	td, _ := s.Create("Fix bug", "2026-11-14")
+	td, _ = s.Update(td, func(x *Todo) { x.Session = "abc"; x.Notes = "notes\n" })
+	id := td.ID
+
+	got, err := s.Edit(td, "  Fix the bug ", "2026-11-18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(got.Path) != "2026-11-18-fix-the-bug.md" || fileExists(td.Path) {
+		t.Fatalf("path = %s, old still exists: %v", got.Path, fileExists(td.Path))
+	}
+	reloaded, _ := Load(got.Path)
+	if reloaded.ID != id || reloaded.Title != "Fix the bug" || reloaded.Date != "2026-11-18" ||
+		reloaded.Session != "abc" || reloaded.Notes != "notes\n" {
+		t.Fatalf("reloaded = %+v", reloaded)
+	}
+
+	// Unchanged slug and date keep a -N suffixed path.
+	s.Create("Dup", "2026-11-18")
+	dup, _ := s.Create("Dup", "2026-11-18")
+	same, err := s.Edit(dup, "dup", "2026-11-18")
+	if err != nil || same.Path != dup.Path {
+		t.Fatalf("path = %s, want %s (err %v)", same.Path, dup.Path, err)
+	}
+
+	// Moving onto an existing name picks a free one.
+	moved, _ := s.Edit(dup, "Fix the bug", "2026-11-18")
+	if filepath.Base(moved.Path) != "2026-11-18-fix-the-bug-2.md" {
+		t.Fatalf("moved path = %s", moved.Path)
+	}
+
+	if _, err := s.Edit(moved, "x", "tomorrow"); err == nil {
+		t.Fatal("expected error for bad date")
+	}
+}

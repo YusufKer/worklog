@@ -48,6 +48,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `ctrl+c` | quit (saves unsaved notes) |
 | list | `j`/`k`, `↑`/`↓`, `g`/`G` | move, top, bottom |
 | | `n` | new todo (title + date, default today) |
+| | `r` | rename or reschedule (renames the file to match) |
 | | `x` / `space` | toggle done (also stops its timer) |
 | | `d` | delete (moved to `.trash/`) |
 | | `enter` / `l` | go to notes |
@@ -64,6 +65,9 @@ worklog -demo       # try it on sample data in a temp directory
 | | `esc` | stop a running agent, otherwise back to list |
 | | `↑`/`↓`, `pgup`/`pgdn` | scroll the conversation |
 | | `/clear` | start a new conversation for this todo |
+
+Date fields take `YYYY-MM-DD` or a shortcut: `today`, `tomorrow`,
+`yesterday`, `+N` / `-N` days from today.
 
 If a timer has been running since an earlier day, or longer than
 `stale_timer_hours`, worklog asks on startup whether to stop it at a given

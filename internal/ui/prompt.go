@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ type modalKind int
 
 const (
 	modalNone modalKind = iota
-	modalNew
+	modalTodo           // new or edit todo form
 	modalDelete
 	modalStaleTimer
 	modalSettings
@@ -24,15 +25,17 @@ const (
 
 const modalWidth = 52
 
-// newTodoForm collects a title and a date (defaulting to today).
-type newTodoForm struct {
+// todoForm collects a title and a date, for a new todo or for editing one.
+type todoForm struct {
+	edit  *store.Todo // nil when creating
 	title textinput.Model
 	date  textinput.Model
 	field int // 0 = title, 1 = date
 	err   string
 }
 
-func newForm() newTodoForm {
+// newForm is the form for a new todo, dated today.
+func newForm() todoForm {
 	title := textinput.New()
 	title.Placeholder = "What needs doing?"
 	title.Prompt = ""
@@ -45,12 +48,43 @@ func newForm() newTodoForm {
 	date.Width = 10
 	date.SetValue(time.Now().Format(store.DateLayout))
 
-	f := newTodoForm{title: title, date: date}
+	f := todoForm{title: title, date: date}
 	f.title.Focus()
 	return f
 }
 
-func (f *newTodoForm) switchField() {
+// editForm is the form for renaming or rescheduling t.
+func editForm(t *store.Todo) todoForm {
+	f := newForm()
+	f.edit = t
+	f.title.SetValue(t.Title)
+	f.date.SetValue(t.Date)
+	return f
+}
+
+// resolveDate expands today, tomorrow, yesterday and +N/-N (days from
+// today) into YYYY-MM-DD. Anything else is returned trimmed, for the store
+// to validate.
+func resolveDate(s string, now time.Time) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	days := 0
+	switch s {
+	case "", "today", "tod":
+	case "tomorrow", "tom":
+		days = 1
+	case "yesterday":
+		days = -1
+	default:
+		n, err := strconv.Atoi(s)
+		if err != nil || (s[0] != '+' && s[0] != '-') {
+			return s
+		}
+		days = n
+	}
+	return now.AddDate(0, 0, days).Format(store.DateLayout)
+}
+
+func (f *todoForm) switchField() {
 	f.field = 1 - f.field
 	if f.field == 0 {
 		f.date.Blur()
@@ -62,7 +96,7 @@ func (f *newTodoForm) switchField() {
 	}
 }
 
-func (f *newTodoForm) update(msg tea.Msg) tea.Cmd {
+func (f *todoForm) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	if f.field == 0 {
 		f.title, cmd = f.title.Update(msg)
@@ -72,7 +106,7 @@ func (f *newTodoForm) update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (f newTodoForm) view() string {
+func (f todoForm) view() string {
 	label := func(s string, active bool) string {
 		if active {
 			return styleSelected.Render(s)
@@ -82,11 +116,16 @@ func (f newTodoForm) view() string {
 	lines := []string{
 		label("Title ", f.field == 0) + f.title.View(),
 		label("Date  ", f.field == 1) + f.date.View(),
+		styleMuted.Render("      YYYY-MM-DD, today, tomorrow, +N, -N"),
 	}
 	if f.err != "" {
 		lines = append(lines, "", styleError.Render(f.err))
 	}
-	return modalBox("New todo", strings.Join(lines, "\n"))
+	heading := "New todo"
+	if f.edit != nil {
+		heading = "Edit todo"
+	}
+	return modalBox(heading, strings.Join(lines, "\n"))
 }
 
 func deleteView(t *store.Todo) string {

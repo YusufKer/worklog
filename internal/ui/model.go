@@ -56,7 +56,7 @@ type Model struct {
 	focus         focus
 
 	modal modalKind
-	form  newTodoForm
+	form  todoForm
 	stale staleTimerForm
 	kept  map[string]bool // stale timers the user chose to keep running
 
@@ -253,7 +253,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateAgent(msg)
 		}
 	}
-	if m.modal == modalNew {
+	if m.modal == modalTodo {
 		return m, m.form.update(msg)
 	}
 	if m.modal == modalStaleTimer {
@@ -426,9 +426,19 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ",":
 		return m, m.openSettings()
 	case "n":
-		m.modal = modalNew
+		m.modal = modalTodo
 		m.form = newForm()
 		return m, textinput.Blink
+	case "r":
+		if t := m.list.selected(); t != nil {
+			if m.agent.running(t.ID) {
+				m.setStatus(m.backend.Name()+" is working on this todo — stop it first (esc in the agent pane)", true)
+			} else {
+				m.modal = modalTodo
+				m.form = editForm(t)
+				return m, textinput.Blink
+			}
+		}
 	case "x", " ", "space":
 		m.toggleDone()
 	case "d":
@@ -684,7 +694,7 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case modalNew:
+	case modalTodo:
 		switch msg.String() {
 		case "esc":
 			m.modal = modalNone
@@ -693,14 +703,25 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form.switchField()
 			return m, nil
 		case "enter":
-			t, err := m.store.Create(m.form.title.Value(), strings.TrimSpace(m.form.date.Value()))
+			title, date := m.form.title.Value(), resolveDate(m.form.date.Value(), time.Now())
+			var t *store.Todo
+			var err error
+			if m.form.edit != nil {
+				t, err = m.store.Edit(m.form.edit, title, date)
+			} else {
+				t, err = m.store.Create(title, date)
+			}
 			if err != nil {
 				m.form.err = capitalize(err.Error())
 				return m, nil
 			}
 			m.modal = modalNone
 			m.reload(t.ID)
-			m.setStatus("Created “"+t.Title+"”", false)
+			if m.form.edit != nil {
+				m.setStatus("Saved “"+t.Title+"” ("+store.DateLabel(t.Date, time.Now())+")", false)
+			} else {
+				m.setStatus("Created “"+t.Title+"”", false)
+			}
 			return m, nil
 		}
 		m.form.err = ""
@@ -821,7 +842,7 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, lipgloss.JoinVertical(lipgloss.Left, notes, agent))
 	switch m.modal {
-	case modalNew:
+	case modalTodo:
 		body = overlay(body, m.form.view(), m.width, bodyH)
 	case modalDelete:
 		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
@@ -875,8 +896,12 @@ func (m Model) footerLeft() string {
 		return " " + styleError.Render(m.status)
 	case m.status != "":
 		return " " + styleDoneIcon.Render(m.status)
-	case m.modal == modalNew:
-		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "create"}, {"esc", "cancel"}})
+	case m.modal == modalTodo:
+		action := "create"
+		if m.form.edit != nil {
+			action = "save"
+		}
+		return renderHelp([]hint{{"tab", "switch field"}, {"enter", action}, {"esc", "cancel"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
 	case m.modal == modalSettings && m.settings.raw:
