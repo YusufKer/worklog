@@ -38,7 +38,8 @@ worklog -demo       # try it on sample data in a temp directory
   live timer; each date header shows the hours worked that day.
 - **Notes** (top right, 67%): the selected todo's Markdown notes.
 - **Agent** (bottom right, 33%): chat with your agent about the selected todo.
-  Each todo has its own conversation.
+  Each todo has its own conversation, kept in `.chats/` in the data folder so
+  it's still there after a restart (`/clear` deletes it).
 
 ## Keys
 

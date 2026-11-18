@@ -71,6 +71,7 @@ func waitEvent(todoID string, ch <-chan agent.Event) tea.Cmd {
 // agentModel is the AI pane: a transcript per todo plus a prompt input.
 type agentModel struct {
 	convs     map[string]*conversation
+	dir       string // data directory, for saved chat history
 	shownID   string
 	vp        viewport.Model
 	input     textinput.Model
@@ -111,10 +112,15 @@ func (a *agentModel) setBackend(name string, markdown bool) {
 func (a *agentModel) conv(id string) *conversation {
 	c, ok := a.convs[id]
 	if !ok {
-		c = &conversation{}
+		c = &conversation{entries: loadHistory(a.dir, id)}
 		a.convs[id] = c
 	}
 	return c
+}
+
+// save writes a todo's transcript to disk.
+func (a *agentModel) save(id string) error {
+	return saveHistory(a.dir, id, a.conv(id).entries)
 }
 
 func (a *agentModel) running(id string) bool {
@@ -154,6 +160,9 @@ func (a *agentModel) setSize(w, h int) {
 func (a *agentModel) show(id string) {
 	if id == a.shownID {
 		return
+	}
+	if id != "" {
+		a.conv(id) // load saved history
 	}
 	a.shownID = id
 	a.refresh()

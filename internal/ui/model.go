@@ -91,6 +91,9 @@ func New(s *store.Store, todos []*store.Todo, o Options) Model {
 		agent:         newAgent(o.GlamStyle, backend.Name(), isClaude(backend)),
 		kept:          map[string]bool{},
 	}
+	if s != nil {
+		m.agent.dir = s.Dir
+	}
 	m.list.setTodos(todos)
 	m.syncSelection()
 	m.setSkipped(o.Skipped)
@@ -196,6 +199,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if done, ok := msg.ev.(agent.EvDone); ok {
 			m.finishRun(msg.todoID, done)
+			m.saveChat(msg.todoID)
 			return m, nil
 		}
 		if run := m.agent.conv(msg.todoID).run; run != nil {
@@ -390,6 +394,9 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 
 	if text == "/clear" {
 		c.entries = nil
+		if err := deleteHistory(m.store.Dir, t.ID); err != nil {
+			m.setStatus("Couldn't delete chat history: "+err.Error(), true)
+		}
 		if t.Session != "" {
 			if _, err := m.store.Update(t, func(t *store.Todo) { t.Session = "" }); err != nil {
 				m.setStatus("Couldn't clear session: "+err.Error(), true)
@@ -425,9 +432,11 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 	})
 	if err != nil {
 		c.add(entError, capitalize(err.Error()))
+		m.saveChat(t.ID)
 		m.agent.refresh()
 		return m, nil
 	}
+	m.saveChat(t.ID)
 	c.run, c.session, c.resumed = run, "", resume != ""
 	m.agent.refresh()
 	m.agent.vp.GotoBottom()
@@ -740,6 +749,8 @@ func (m *Model) applySettings(cfg config.Config, save func() error) error {
 		m.store = newStore
 		m.stamps = fileStamps(newStore.Dir)
 		m.agent.convs = map[string]*conversation{}
+		m.agent.dir = newStore.Dir
+		m.agent.shownID = ""
 		m.kept = map[string]bool{}
 		m.list.cursor, m.list.offset = 0, 0
 		m.list.setTodos(todos)
@@ -1100,6 +1111,12 @@ func (m *Model) setSkipped(bad []store.BadFile) {
 			names[i] = b.Name
 		}
 		m.setStatus(fmt.Sprintf("Skipped %d unreadable files: %s", len(bad), strings.Join(names, ", ")), true)
+	}
+}
+
+func (m *Model) saveChat(todoID string) {
+	if err := m.agent.save(todoID); err != nil {
+		m.setStatus("Couldn't save chat history: "+err.Error(), true)
 	}
 }
 
