@@ -30,7 +30,8 @@ type notesModel struct {
 	editing  bool
 	editID   string
 	ta       textarea.Model
-	original string
+	original string // textarea value when editing started or last saved
+	base     string // notes on disk at that point, without trailing newlines
 }
 
 func newNotes(glamStyle string) notesModel {
@@ -116,6 +117,7 @@ func (n *notesModel) startEdit(t *store.Todo) tea.Cmd {
 	n.editing = true
 	n.editID = t.ID
 	n.original = strings.TrimRight(t.Notes, "\n")
+	n.base = n.original
 	n.ta.SetValue(n.original)
 	cmd := n.ta.Focus()
 	// SetValue leaves the cursor at the end; jump to the start of the text.
@@ -130,7 +132,16 @@ func (n *notesModel) stopEdit() {
 }
 
 // markSaved records the current text as the saved baseline.
-func (n *notesModel) markSaved() { n.original = n.ta.Value() }
+func (n *notesModel) markSaved() {
+	n.original = n.ta.Value()
+	n.base = strings.TrimRight(n.value(), "\n")
+}
+
+// changedOnDisk reports whether notes read from disk differ from the version
+// this edit started from (or last saved).
+func (n *notesModel) changedOnDisk(disk string) bool {
+	return strings.TrimRight(disk, "\n") != n.base
+}
 
 func (n *notesModel) dirty() bool { return n.editing && n.ta.Value() != n.original }
 

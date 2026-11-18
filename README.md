@@ -109,8 +109,10 @@ time:
 Your notes…
 ```
 
-You can edit, grep or version these files with anything. Deleted todos are
-moved to `.trash/`.
+You can edit, grep or version these files with anything: worklog checks the
+folder every couple of seconds and picks up changes. If notes you're editing
+in worklog change on disk, saving keeps your version and puts the other in
+`.trash/`. Deleted todos are moved to `.trash/` too.
 
 ## Configuration
 

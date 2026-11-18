@@ -45,4 +45,5 @@ TOML at `~/.config/worklog/config.toml`. `Render` writes a commented file (not p
 - Before sending a prompt, a dirty inline editor buffer is saved and editing stopped so the agent sees current notes and isn't overwritten. On `EvDone`, `finishRun` persists the Claude session ID to the todo's `session` frontmatter (cleared on `/clear` or "no conversation found").
 - `systemPrompt()` in ui/agent.go is the context given to the agent (todo, notes path, "don't touch frontmatter").
 - `applySettings` validates a new config (including loading a new data dir) before saving, then swaps backend/store live.
+- `watch.go` polls the data dir every 2s (size + mtime of top-level `*.md`) and reloads on any change, including the app's own writes; a baseline is taken in `New` and on data-dir switches. `saveNotes` backs up the on-disk version to `.trash/` if it changed since editing started (`notesModel.base`).
 - A 1s `timerTick` loop runs only while a timer is running (`ensureTick`).

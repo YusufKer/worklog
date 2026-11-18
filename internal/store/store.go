@@ -251,6 +251,22 @@ func (s *Store) Delete(t *Todo) error {
 	return os.Rename(t.Path, dest)
 }
 
+// Backup copies the todo's file into .trash/ with a timestamp, for keeping a
+// version that is about to be overwritten. It returns the copy's path.
+func (s *Store) Backup(t *Todo) (string, error) {
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return "", err
+	}
+	trash := filepath.Join(s.Dir, ".trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		return "", err
+	}
+	name := strings.TrimSuffix(filepath.Base(t.Path), ".md")
+	dest := filepath.Join(trash, fmt.Sprintf("%s.%s.md", name, time.Now().Format("20060102-150405")))
+	return dest, os.WriteFile(dest, data, 0o644)
+}
+
 // Marshal renders a todo as frontmatter followed by its notes.
 func Marshal(t *Todo) ([]byte, error) {
 	fm, err := yaml.Marshal(t)

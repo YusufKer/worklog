@@ -62,8 +62,9 @@ type Model struct {
 	week  weekReport
 	kept  map[string]bool // stale timers the user chose to keep running
 
-	ticking bool   // a timer tick loop is active
-	status  string // one-shot message shown in the footer
+	stamps  map[string]string // last poll of the data directory
+	ticking bool              // a timer tick loop is active
+	status  string            // one-shot message shown in the footer
 	isErr   bool
 
 	width, height int
@@ -89,6 +90,9 @@ func New(s *store.Store, todos []*store.Todo, o Options) Model {
 	}
 	m.list.setTodos(todos)
 	m.syncSelection()
+	if s != nil {
+		m.stamps = fileStamps(s.Dir) // baseline for spotting outside changes
+	}
 	m.ticking = m.runningTodo() != nil
 	m.checkStale()
 	return m
@@ -106,10 +110,11 @@ func timerTick() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{pollFiles(m.store.Dir)}
 	if m.ticking {
-		return timerTick()
+		cmds = append(cmds, timerTick())
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 // runningTodo returns the todo whose timer is running, if any.
@@ -193,6 +198,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitEvent(msg.todoID, run.Events)
 		}
 		return m, nil
+
+	case filesMsg:
+		return m.handleFiles(msg)
 
 	case timerTickMsg:
 		if m.runningTodo() == nil {
@@ -596,6 +604,15 @@ func (m *Model) saveNotes() bool {
 		m.setStatus("Couldn't save: todo no longer exists", true)
 		return false
 	}
+	// If the notes changed on disk since editing started, keep that version
+	// in .trash/ rather than silently overwriting it.
+	backup := ""
+	if disk, err := store.Load(target.Path); err == nil && m.notes.changedOnDisk(disk.Notes) {
+		if backup, err = m.store.Backup(disk); err != nil {
+			m.setStatus("Couldn't back up the version on disk, so didn't save: "+err.Error(), true)
+			return false
+		}
+	}
 	notes := m.notes.value()
 	if _, err := m.store.Update(target, func(t *store.Todo) { t.Notes = notes }); err != nil {
 		m.setStatus("Couldn't save: "+err.Error(), true)
@@ -603,6 +620,9 @@ func (m *Model) saveNotes() bool {
 	}
 	m.notes.markSaved()
 	m.reload(target.ID)
+	if backup != "" {
+		m.setStatus("Saved. The notes had changed on disk; that version is in "+shortenHome(backup), false)
+	}
 	return true
 }
 
@@ -711,6 +731,7 @@ func (m *Model) applySettings(cfg config.Config, save func() error) error {
 	m.agent.setBackend(m.backend.Name(), isClaude(m.backend))
 	if newStore != nil {
 		m.store = newStore
+		m.stamps = fileStamps(newStore.Dir)
 		m.agent.convs = map[string]*conversation{}
 		m.kept = map[string]bool{}
 		m.list.cursor, m.list.offset = 0, 0
@@ -987,6 +1008,11 @@ func (m *Model) reload(selectID string) {
 	m.list.setTodos(todos)
 	if selectID != "" {
 		m.list.selectID(selectID)
+	}
+	if m.modal == modalTime {
+		if t := m.todoByID(m.times.todo.ID); t != nil {
+			m.times.setTodo(t)
+		}
 	}
 	m.notes.invalidate()
 	m.syncSelection()
