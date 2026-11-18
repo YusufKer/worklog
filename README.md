@@ -123,9 +123,12 @@ Your notes…
 You can edit, grep or version these files with anything: worklog checks the
 folder every couple of seconds and picks up changes. If notes you're editing
 in worklog change on disk, saving keeps your version and puts the other in
-`.trash/`. Deleted todos are moved to `.trash/` too. A file worklog can't
-parse (e.g. broken frontmatter) is skipped with a warning and left untouched
-until you fix it.
+`.trash/`. Deleted todos are moved to `.trash/` too; if a todo is deleted
+while you're editing its notes, the text goes to `.trash/` as well, so `u`
+can bring it back. The inline editor keeps tabs on lines you don't change
+and refuses notes over 10,000 lines (use another editor for those). A file
+worklog can't parse (e.g. broken frontmatter) is skipped with a warning and
+left untouched until you fix it.
 
 ## Configuration
 

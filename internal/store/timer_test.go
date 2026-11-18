@@ -81,6 +81,46 @@ func TestTotalsAcrossMidnight(t *testing.T) {
 	}
 }
 
+func TestSplitDaysAcrossSkippedMidnight(t *testing.T) {
+	// In Chile DST starts at midnight: 2026-09-06 00:00 doesn't exist, the
+	// clocks jump from 23:59 -04 to 01:00 -03. time.Date normalises the
+	// missing midnight to 23:00 the day before, which used to stall ByDay.
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skip(err)
+	}
+	td := &Todo{Time: []TimeEntry{{
+		Start: time.Date(2026, 9, 4, 12, 0, 0, 0, loc),
+		End:   ptr(time.Date(2026, 9, 6, 2, 0, 0, 0, loc)),
+	}}}
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, loc)
+
+	done := make(chan map[string]time.Duration, 1)
+	go func() { done <- td.ByDay(now) }()
+	var days map[string]time.Duration
+	select {
+	case days = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ByDay did not return: splitDays is looping")
+	}
+	want := map[string]time.Duration{
+		"2026-09-04": 12 * time.Hour,
+		"2026-09-05": 24 * time.Hour, // 00:00 -04 … 01:00 -03 is a full 24h
+		"2026-09-06": time.Hour,
+	}
+	if len(days) != len(want) {
+		t.Fatalf("by day = %v, want %v", days, want)
+	}
+	for day, d := range want {
+		if days[day] != d {
+			t.Errorf("%s = %v, want %v", day, days[day], d)
+		}
+	}
+	if got := td.Total(now); got != 37*time.Hour {
+		t.Errorf("total = %v", got)
+	}
+}
+
 func TestStale(t *testing.T) {
 	now := at("2026-11-17 18:00")
 	cases := []struct {

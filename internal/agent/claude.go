@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,7 @@ func (c Claude) Args(o Options) []string {
 		msg = "[Notes file: " + o.NotesFile + "]\n\n" + msg
 	}
 	args := []string{
-		"-p", msg,
+		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
@@ -52,8 +53,13 @@ func (c Claude) Args(o Options) []string {
 	if o.Session != "" {
 		args = append(args, "--resume", o.Session)
 	}
-	return args
+	// -p is a boolean flag and the prompt is positional, so it goes last,
+	// after "--", or a message starting with "-" would be read as an option.
+	return append(args, "--", msg)
 }
+
+// maxLine bounds a single line of stream-json output.
+const maxLine = 32 * 1024 * 1024
 
 // Start launches claude and streams its events until it exits.
 func (c Claude) Start(o Options) (*Run, error) {
@@ -71,11 +77,20 @@ func (c Claude) Start(o Options) (*Run, error) {
 	return launch(path, c.Args(o), o.Dir, true, func(stdout io.Reader, emit func(Event)) bool {
 		p := &Parser{}
 		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+		sc.Buffer(make([]byte, 0, 64*1024), maxLine)
 		for sc.Scan() {
 			for _, ev := range p.Parse(sc.Bytes()) {
 				emit(ev)
 			}
+		}
+		if err := sc.Err(); err != nil && !p.Done {
+			// launch drains the rest of stdout so the child can exit.
+			msg := "reading agent output: " + err.Error()
+			if errors.Is(err, bufio.ErrTooLong) {
+				msg = fmt.Sprintf("agent output line too long (over %d MB)", maxLine>>20)
+			}
+			emit(EvDone{IsError: true, Message: msg})
+			return true
 		}
 		return p.Done
 	})

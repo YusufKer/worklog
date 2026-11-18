@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,79 @@ func TestCommandFailure(t *testing.T) {
 	}
 	if _, err := (Command{Argv: []string{"definitely-not-a-real-agent"}}).Start(Options{}); err == nil {
 		t.Error("expected error for missing command")
+	}
+}
+
+// chunkReader hands out r in fixed-size reads, like a pipe would.
+type chunkReader struct {
+	r    io.Reader
+	size int
+}
+
+func (c chunkReader) Read(p []byte) (int, error) {
+	if len(p) > c.size {
+		p = p[:c.size]
+	}
+	return c.r.Read(p)
+}
+
+// An escape sequence split across two reads used to leak its tail ("31m")
+// into the text, because ansi.Strip ran on each read separately.
+func TestStreamTextHoldsBackSplitEscape(t *testing.T) {
+	body := strings.Repeat("a", 4094) + "\x1b[31mred\x1b[0m"
+	for _, size := range []int{4096, 4095, 4097, 1, 7} {
+		var got strings.Builder
+		streamText(chunkReader{strings.NewReader(body), size}, func(s string) { got.WriteString(s) })
+		if want := strings.Repeat("a", 4094) + "red"; got.String() != want {
+			t.Errorf("chunk size %d: got %q (len %d), want %d a's + \"red\"", size, got.String(), got.Len(), 4094)
+		}
+	}
+
+	// Pending bytes are flushed at EOF, including a lone ESC.
+	var got strings.Builder
+	streamText(chunkReader{strings.NewReader("hi\x1b"), 1}, func(s string) { got.WriteString(s) })
+	if got.String() != "hi" {
+		t.Errorf("EOF flush: got %q", got.String())
+	}
+}
+
+func TestCommandSplitEscape(t *testing.T) {
+	// printf writes 4094 bytes then a colour sequence, so a 4096-byte read
+	// ends with "ESC [" and the next one starts with "31m".
+	c := Command{Argv: []string{"sh", "-c", `head -c 4094 /dev/zero | tr '\0' a; printf '\033[31mred\033[0m\n'`}}
+	run, err := c.Start(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, done := collect(t, run)
+	if want := strings.Repeat("a", 4094) + "red\n"; text != want {
+		t.Errorf("text = %q...%q (len %d), want %d a's + \"red\\n\"", text[:min(10, len(text))], text[max(0, len(text)-12):], len(text), 4094)
+	}
+	if done.IsError {
+		t.Errorf("done = %+v", done)
+	}
+}
+
+func TestEscPrefix(t *testing.T) {
+	cases := map[string]int{
+		"plain":                             5,
+		"ab\x1b":                            2, // bare ESC
+		"ab\x1b[":                           2, // CSI without final byte
+		"ab\x1b[31":                         2,
+		"ab\x1b[31m":                        7, // complete CSI
+		"ab\x1b[31mcd":                      9,
+		"ab\x1b]0;title":                    2,    // OSC without terminator
+		"ab\x1b]0;t\x07":                    8,    // OSC + BEL
+		"ab\x1b]0;t\x1b\\":                  9,    // OSC + ST: last ESC is the ST
+		"ab\x1b(":                           2,    // nF without final
+		"ab\x1b(B":                          5,    // charset select
+		"ab\x1bM":                           4,    // two-byte Fe
+		"\x1b[" + strings.Repeat("1;", 600): 1202, // too long to be real; pass through
+	}
+	for in, want := range cases {
+		if got := escPrefix([]byte(in)); got != want {
+			t.Errorf("escPrefix(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 

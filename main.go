@@ -35,7 +35,7 @@ func main() {
 }
 
 func run(dirFlag, configPath string, demo bool) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfig(configPath, demo)
 	if err != nil {
 		return err
 	}
@@ -74,6 +74,17 @@ func run(dirFlag, configPath string, demo bool) error {
 	})
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+// loadConfig reads the config file. In demo mode a broken config is
+// reported and ignored so -demo always starts.
+func loadConfig(path string, demo bool) (config.Config, error) {
+	cfg, err := config.Load(path)
+	if err != nil && demo {
+		fmt.Fprintln(os.Stderr, "worklog: ignoring config:", err)
+		return config.Config{}, nil
+	}
+	return cfg, err
 }
 
 // dataDir picks the data directory: -dir, then $WORKLOG_DIR, then the

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/YusufKer/worklog/internal/store"
@@ -32,6 +33,22 @@ type notesModel struct {
 	ta       textarea.Model
 	original string // textarea value when editing started or last saved
 	base     string // notes on disk at that point, without trailing newlines
+
+	// The textarea replaces tabs with spaces. tabLines maps each such
+	// expanded line back to its original so untouched lines keep their tabs.
+	tabLines map[string]string
+
+	// What the todo looked like when editing started, so the text can still
+	// be kept somewhere if the todo is deleted underneath the editor.
+	editTitle, editDate, editFile string
+}
+
+// maxEditLines is the textarea's hard line limit; longer notes would be
+// silently cut off, so they can't be edited inline.
+const maxEditLines = 10000
+
+func tooLongToEdit(notes string) bool {
+	return strings.Count(strings.TrimRight(notes, "\n"), "\n")+1 > maxEditLines
 }
 
 func newNotes(glamStyle string) notesModel {
@@ -116,9 +133,13 @@ func (n *notesModel) render(t *store.Todo) string {
 func (n *notesModel) startEdit(t *store.Todo) tea.Cmd {
 	n.editing = true
 	n.editID = t.ID
-	n.original = strings.TrimRight(t.Notes, "\n")
-	n.base = n.original
-	n.ta.SetValue(n.original)
+	n.editTitle, n.editDate, n.editFile = t.Title, t.Date, filepath.Base(t.Path)
+	n.base = strings.TrimRight(t.Notes, "\n")
+	n.tabLines = tabMap(n.base)
+	n.ta.SetValue(n.base)
+	// Compare against what the textarea holds (tabs expanded), not the raw
+	// notes, so merely opening the editor doesn't count as a change.
+	n.original = n.ta.Value()
 	cmd := n.ta.Focus()
 	// SetValue leaves the cursor at the end; jump to the start of the text.
 	n.ta, _ = n.ta.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
@@ -145,13 +166,57 @@ func (n *notesModel) changedOnDisk(disk string) bool {
 
 func (n *notesModel) dirty() bool { return n.editing && n.ta.Value() != n.original }
 
-// value returns the edited notes, normalised to end with a newline.
+// value returns the edited notes, normalised to end with a newline, with
+// tabs restored on lines the user didn't change.
 func (n *notesModel) value() string {
 	v := strings.TrimRight(n.ta.Value(), "\n")
 	if v == "" {
 		return ""
 	}
+	if len(n.tabLines) > 0 {
+		lines := strings.Split(v, "\n")
+		for i, l := range lines {
+			if orig, ok := n.tabLines[l]; ok {
+				lines[i] = orig
+			}
+		}
+		v = strings.Join(lines, "\n")
+	}
 	return v + "\n"
+}
+
+// tabMap maps each tab-containing line of notes, as the textarea shows it
+// (tabs expanded to four spaces), back to the line itself. Lines whose
+// expanded form also appears literally in the notes are left out, since
+// restoring tabs there could change a line the user never touched.
+func tabMap(notes string) map[string]string {
+	lines := strings.Split(notes, "\n")
+	literal := map[string]bool{}
+	for _, l := range lines {
+		if !strings.Contains(l, "\t") {
+			literal[l] = true
+		}
+	}
+	var m map[string]string
+	for _, l := range lines {
+		if !strings.Contains(l, "\t") {
+			continue
+		}
+		exp := strings.ReplaceAll(l, "\t", "    ")
+		if literal[exp] {
+			continue
+		}
+		if prev, ok := m[exp]; ok && prev != l {
+			delete(m, exp) // two different tab layouts expand the same way
+			literal[exp] = true
+			continue
+		}
+		if m == nil {
+			m = map[string]string{}
+		}
+		m[exp] = l
+	}
+	return m
 }
 
 func (n *notesModel) view() string {

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/YusufKer/worklog/internal/agent"
 	"github.com/YusufKer/worklog/internal/config"
@@ -63,6 +66,8 @@ type Model struct {
 	week  weekReport
 	trash trashList
 	kept  map[string]bool // stale timers the user chose to keep running
+
+	deleteID string // todo the delete dialog was opened for
 
 	stamps  map[string]string // last poll of the data directory
 	skipped []store.BadFile   // todo files that couldn't be read
@@ -437,7 +442,7 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.saveChat(t.ID)
-	c.run, c.session, c.resumed = run, "", resume != ""
+	c.run, c.session, c.resumed, c.resumable = run, "", resume != "", m.backend.Resumable()
 	m.agent.refresh()
 	m.agent.vp.GotoBottom()
 	return m, tea.Batch(waitEvent(t.ID, run.Events), m.agent.spin.Tick)
@@ -457,7 +462,9 @@ func (m *Model) finishRun(todoID string, done agent.EvDone) {
 		c.add(entInfo, "Previous conversation not found — the next message starts a new one.")
 		m.agent.refresh()
 	}
-	if !m.backend.Resumable() || session == t.Session || (session == "" && !c.resumed) {
+	// Check the backend that produced this run, not the current one: the
+	// settings may have switched agent type while it was running.
+	if !c.resumable || session == t.Session || (session == "" && !c.resumed) {
 		return
 	}
 	if _, err := m.store.Update(t, func(t *store.Todo) { t.Session = session }); err != nil {
@@ -533,7 +540,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.agent.running(t.ID) {
 				m.setStatus(m.backend.Name()+" is working on this todo — stop it first (esc in the agent pane)", true)
 			} else {
-				m.modal = modalDelete
+				m.modal, m.deleteID = modalDelete, t.ID
 			}
 		}
 	}
@@ -584,6 +591,10 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 		m.setStatus(m.backend.Name()+" is working on these notes — wait for it, or press esc in the agent pane to stop", true)
 		return m, nil
 	}
+	if tooLongToEdit(t.Notes) {
+		m.setStatus(fmt.Sprintf("These notes are over %d lines, too long to edit here — use another editor", maxEditLines), true)
+		return m, nil
+	}
 	m.setFocus(focusNotes)
 	return m, m.notes.startEdit(t)
 }
@@ -616,8 +627,17 @@ func (m *Model) saveNotes() bool {
 		}
 	}
 	if target == nil {
-		m.setStatus("Couldn't save: todo no longer exists", true)
-		return false
+		// The todo was deleted underneath the editor. Keep the text in
+		// .trash/ where it can be restored, and stop editing so the user
+		// isn't stuck in an editor that can't save.
+		path, err := m.stashNotes()
+		if err != nil {
+			m.setStatus("The todo was deleted and the notes couldn't be kept: "+err.Error(), true)
+			return false
+		}
+		m.notes.stopEdit()
+		m.setStatus("The todo was deleted while editing; your notes are in "+shortenHome(path)+" — u to restore", true)
+		return true
 	}
 	// If the notes changed on disk since editing started, keep that version
 	// in .trash/ rather than silently overwriting it.
@@ -639,6 +659,29 @@ func (m *Model) saveNotes() bool {
 		m.setStatus("Saved. The notes had changed on disk; that version is in "+shortenHome(backup), false)
 	}
 	return true
+}
+
+// stashNotes writes the editor contents to .trash/ as a todo file, so the
+// trash screen can restore it.
+func (m *Model) stashNotes() (string, error) {
+	n := &m.notes
+	data, err := store.Marshal(&store.Todo{ID: n.editID, Title: n.editTitle, Date: n.editDate, Notes: n.value()})
+	if err != nil {
+		return "", err
+	}
+	trash := filepath.Join(m.store.Dir, ".trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		return "", err
+	}
+	name := strings.TrimSuffix(n.editFile, ".md")
+	if name == "" {
+		name = n.editID
+	}
+	path := filepath.Join(trash, name+".md")
+	if _, err := os.Stat(path); err == nil {
+		path = filepath.Join(trash, name+"-"+time.Now().Format("20060102-150405")+".md")
+	}
+	return path, os.WriteFile(path, data, 0o644)
 }
 
 func (m *Model) openSettings() tea.Cmd {
@@ -665,9 +708,7 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				f.err = capitalize(err.Error())
 				return m, nil
 			}
-			m.modal = modalNone
-			m.setStatus("Settings saved", false)
-			return m, nil
+			return m, m.settingsSaved()
 		}
 		return m, f.update(msg)
 	}
@@ -685,9 +726,7 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			f.err = capitalize(err.Error())
 			return m, nil
 		}
-		m.modal = modalNone
-		m.setStatus("Settings saved", false)
-		return m, nil
+		return m, m.settingsSaved()
 	case "ctrl+e":
 		return m, f.startRaw(m.height - 16)
 	case "up", "shift+tab":
@@ -708,6 +747,15 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	f.err = ""
 	return m, f.update(msg)
+}
+
+// settingsSaved closes the settings screen. A new data folder may have a
+// running or forgotten timer, so the clock and the stale check start again.
+func (m *Model) settingsSaved() tea.Cmd {
+	m.modal = modalNone
+	m.setStatus("Settings saved", false)
+	m.checkStale()
+	return m.ensureTick()
 }
 
 // applySettings switches to the new settings. save is called once the new
@@ -814,7 +862,17 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y", "enter":
 			m.modal = modalNone
-			m.deleteSelected()
+			// The list may have reloaded since the dialog opened, so delete
+			// the todo it was opened for, not whatever is selected now.
+			t := m.todoByID(m.deleteID)
+			switch {
+			case t == nil:
+				m.setStatus("That todo is already gone", true)
+			case m.agent.running(t.ID):
+				m.setStatus(m.backend.Name()+" is working on this todo — stop it first (esc in the agent pane)", true)
+			default:
+				m.deleteTodo(t)
+			}
 		case "n", "N", "esc", "q":
 			m.modal = modalNone
 		}
@@ -1043,11 +1101,7 @@ func (m *Model) toggleDone() {
 	m.reload(t.ID)
 }
 
-func (m *Model) deleteSelected() {
-	t := m.list.selected()
-	if t == nil {
-		return
-	}
+func (m *Model) deleteTodo(t *store.Todo) {
 	if err := m.store.Delete(t); err != nil {
 		m.setStatus("Couldn't delete: "+err.Error(), true)
 		return
@@ -1074,6 +1128,10 @@ func (m *Model) reload(selectID string) {
 			m.times.setTodo(t)
 		}
 	}
+	if m.modal == modalDelete && m.todoByID(m.deleteID) == nil {
+		m.modal = modalNone // deleted or hidden underneath the dialog
+		m.setStatus("That todo is already gone", true)
+	}
 	m.notes.invalidate()
 	m.syncSelection()
 }
@@ -1088,10 +1146,11 @@ func (m *Model) reloadKeepSelection() {
 }
 
 func capitalize(s string) string {
-	if s == "" {
+	r, size := utf8.DecodeRuneInString(s)
+	if size == 0 || r == utf8.RuneError {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 // setSkipped records unreadable files, warning when the set changes.
@@ -1179,7 +1238,9 @@ func (m Model) View() string {
 	case modalTodo:
 		body = overlay(body, m.form.view(), m.width, bodyH)
 	case modalDelete:
-		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
+		if t := m.todoByID(m.deleteID); t != nil {
+			body = overlay(body, deleteView(t), m.width, bodyH)
+		}
 	case modalKeys:
 		body = overlay(body, keysView(), m.width, bodyH)
 	case modalTime:

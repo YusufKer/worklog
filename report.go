@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"time"
 
@@ -24,6 +26,9 @@ func report(args []string, out io.Writer) error {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil // usage already printed
+		}
 		return err
 	}
 	if fs.NArg() > 0 {
@@ -39,7 +44,16 @@ func report(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	s, err := store.New(dataDir(*dirFlag, cfg))
+	// Reports are read-only: unlike the TUI, don't create a missing data dir.
+	dir := dataDir(*dirFlag, cfg)
+	if fi, err := os.Stat(dir); errors.Is(err, iofs.ErrNotExist) {
+		return fmt.Errorf("no such directory: %s", dir)
+	} else if err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("not a directory: %s", dir)
+	}
+	s, err := store.New(dir)
 	if err != nil {
 		return err
 	}

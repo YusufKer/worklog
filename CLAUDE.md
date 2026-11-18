@@ -23,8 +23,9 @@ UI tests in `internal/ui` drive `Model.Update` directly (e.g. `TestFastTypingInt
 `main.go` resolves the data dir (precedence: `-demo` > `-dir` > `$WORKLOG_DIR` > config `dir` > `~/worklog`), loads todos, and starts `ui.Model`. `DirOverridden` tells the settings screen the dir can't be changed in-app.
 
 ### internal/store — the files are the database
-- `.trash/` holds deleted todos and timestamped conflict backups (`Backup`); `Restore` gives a todo a new ID if its ID is already in use.
-- `LoadAll` skips unparseable files and returns them as `[]BadFile`; the UI shows a "skipped" count and never writes to them.
+- `.trash/` holds deleted todos and timestamped conflict backups (`Backup`); names never overwrite (`uniqueFile` adds `-2`, `-3`, …). `Restore` gives a todo a new ID, and drops its session and time entries, if its ID is already in use.
+- `LoadAll` skips hidden files (the `.tmp-*` files `Save` writes) and unparseable files, returning the latter as `[]BadFile`; the UI shows a "skipped" count and never writes to them. A leading `---` block that doesn't look like `key:` YAML is treated as notes, not broken frontmatter.
+- Day boundaries go through `startOfDay` (timer.go), never bare `time.Date(y, m, d, 0, …)`: zones where DST starts at midnight have no 00:00 that day.
 - One `.md` file per todo: `YYYY-MM-DD-<slug>.md`, frontmatter (`Todo` struct, yaml tags) + notes body. `Parse`/`Marshal` round-trip it; files without frontmatter still load.
 - `Save` is atomic (temp file + rename). **Mutations go through `Store.Update(t, fn)`**, which re-reads from disk before applying `fn`, because the agent edits the same files concurrently. Don't write a stale in-memory `Todo` back with `Save` directly.
 - `Edit` (rename/reschedule) renames the file to `date-slug.md` but keeps the `id`; UI state (agent conversations, editor) is keyed by ID, not path. Delete moves files to `.trash/`.
@@ -46,7 +47,9 @@ TOML at `~/.config/worklog/config.toml`. `Render` writes a commented file (not p
 - `listModel` keeps `all` (every todo) and `todos` (visible after search / hide-done). Anything that isn't about display — timers, stale checks, daily totals, finding a todo by ID — must use `all`.
 - Agent runs are per-todo: `agentModel.convs[todoID]` holds each conversation and its in-flight `Run`; events arrive as `agentEventMsg` via `waitEvent`, which must be re-armed after each event until `EvDone`. Edit tool results and `EvDone` trigger `reloadKeepSelection()` so the notes pane reflects agent edits.
 - Transcripts are saved per todo to `<dir>/.chats/<id>.json` (history.go) on send and on `EvDone`, loaded lazily by `agentModel.conv`, and deleted by `/clear`. This is display only; the agent's memory is the `session` ID.
-- Before sending a prompt, a dirty inline editor buffer is saved and editing stopped so the agent sees current notes and isn't overwritten. On `EvDone`, `finishRun` persists the Claude session ID to the todo's `session` frontmatter (cleared on `/clear` or "no conversation found").
+- Before sending a prompt, a dirty inline editor buffer is saved and editing stopped so the agent sees current notes and isn't overwritten. On `EvDone`, `finishRun` persists the Claude session ID to the todo's `session` frontmatter (cleared on `/clear` or "no conversation found"); it checks `conversation.resumable` (the backend that started the run), not the current backend.
+- The textarea expands tabs to spaces; `notesModel.tabLines` maps untouched lines back on save, `original` is the textarea's value (not the raw notes) so opening the editor isn't a change, and notes over `maxEditLines` can't be opened. If the todo vanishes mid-edit, `stashNotes` writes the buffer to `.trash/`.
+- Modals that act on a todo remember its ID (`deleteID`) rather than using the current selection, since a poll can reload the list while they're open.
 - `systemPrompt()` in ui/agent.go is the context given to the agent (todo, notes path, "don't touch frontmatter").
 - `applySettings` validates a new config (including loading a new data dir) before saving, then swaps backend/store live.
 - `watch.go` polls the data dir every 2s (size + mtime of top-level `*.md`) and reloads on any change, including the app's own writes; a baseline is taken in `New` and on data-dir switches. `saveNotes` backs up the on-disk version to `.trash/` if it changed since editing started (`notesModel.base`).

@@ -31,6 +31,63 @@ func TestParseNoFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseEmptyFrontmatter(t *testing.T) {
+	td, err := Parse([]byte("---\n---\nbody\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if td.Notes != "body\n" || td.Title != "" {
+		t.Fatalf("got %+v", td)
+	}
+}
+
+func TestParseHorizontalRuleIsNotes(t *testing.T) {
+	for _, src := range []string{
+		"---\nA thought, then a rule.\n---\nmore\n",        // closed by a second rule
+		"---\n# Heading\n\nkey-ish: but a heading first\n", // never closed
+	} {
+		td, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if td.Notes != src {
+			t.Fatalf("%q: notes = %q", src, td.Notes)
+		}
+	}
+	// Genuinely broken frontmatter is still an error, not silently notes.
+	if _, err := Parse([]byte("---\ntitle: [unclosed\n---\n")); err == nil {
+		t.Fatal("expected error for broken frontmatter")
+	}
+}
+
+func TestParseStripsBOM(t *testing.T) {
+	td, err := Parse([]byte("\uFEFF---\nid: abc\ntitle: Bom\n---\n\nnotes\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if td.ID != "abc" || td.Title != "Bom" || td.Notes != "notes\n" {
+		t.Fatalf("got %+v", td)
+	}
+}
+
+func TestLoadAllSkipsHiddenFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	td, _ := s.Create("Only", "2026-11-18")
+	data, _ := os.ReadFile(td.Path)
+	// A leftover temp file from an interrupted Save must not load as a duplicate.
+	if err := os.WriteFile(filepath.Join(dir, ".tmp-123.md"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	todos, bad, err := s.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(todos) != 1 || len(bad) != 0 || todos[0].ID != td.ID {
+		t.Fatalf("todos = %+v bad = %v", todos, bad)
+	}
+}
+
 func TestLoadAllSortsAndGroups(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {
@@ -240,5 +297,103 @@ func TestTrashAndRestore(t *testing.T) {
 	}
 	if all, _, _ := s.LoadAll(); len(all) != 3 {
 		t.Fatalf("want 3 todos, got %d", len(all))
+	}
+}
+
+func TestRestoreBackupDropsTime(t *testing.T) {
+	s, _ := New(t.TempDir())
+	kept, _ := s.Create("Kept", "2026-11-17")
+	if err := s.StartTimer(kept, nil, at("2026-11-17 09:00")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Backup(kept); err != nil {
+		t.Fatal(err)
+	}
+	trash, _ := s.Trash()
+	existing, _, _ := s.LoadAll()
+	got, err := s.Restore(trash[0].Name, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Time) != 0 {
+		t.Fatalf("restored backup kept time entries: %+v", got.Time)
+	}
+	all, _, _ := s.LoadAll()
+	running := 0
+	for _, x := range all {
+		if x.Running() != nil {
+			running++
+		}
+	}
+	if len(all) != 2 || running != 1 {
+		t.Fatalf("%d todos, %d running timers", len(all), running)
+	}
+}
+
+func TestTrashNamesNeverClobber(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	// Three deletes of the same file name within one second.
+	for i := range 3 {
+		td, _ := s.Create("Same", "2026-11-17")
+		if filepath.Base(td.Path) != "2026-11-17-same.md" {
+			t.Fatalf("round %d: path = %s", i, td.Path)
+		}
+		if err := s.Delete(td); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"2026-11-17-same.md", "2026-11-17-same-2.md", "2026-11-17-same-3.md"} {
+		if !fileExists(filepath.Join(dir, ".trash", name)) {
+			t.Errorf("missing %s", name)
+		}
+	}
+
+	// Two backups within one second.
+	kept, _ := s.Create("Kept", "2026-11-17")
+	a, err := s.Backup(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.Backup(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b || !fileExists(a) || !fileExists(b) {
+		t.Fatalf("backups %s and %s", a, b)
+	}
+
+	trash, _ := s.Trash()
+	backups := 0
+	for _, x := range trash {
+		if x.Backup {
+			backups++
+		}
+	}
+	if len(trash) != 5 || backups != 2 {
+		t.Fatalf("trash = %+v", trash)
+	}
+}
+
+func TestDateLabelAcrossDST(t *testing.T) {
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skip(err)
+	}
+	// Clocks go forward on 2026-03-29 (a 23h day) and back on 2026-10-25 (25h).
+	for _, c := range []struct{ now, date, want string }{
+		{"2026-03-30 09:00", "2026-03-30", "Today"},
+		{"2026-03-30 09:00", "2026-03-29", "Yesterday"},
+		{"2026-03-30 09:00", "2026-03-28", "Sat Mar 28"},
+		{"2026-03-30 09:00", "2026-03-31", "Tomorrow"},
+		{"2026-03-29 09:00", "2026-03-28", "Yesterday"},
+		{"2026-10-26 09:00", "2026-10-25", "Yesterday"},
+		{"2026-10-26 09:00", "2026-10-24", "Sat Oct 24"},
+		{"2026-10-25 09:00", "2026-10-26", "Tomorrow"},
+	} {
+		now, _ := time.ParseInLocation("2006-01-02 15:04", c.now, london)
+		if got := DateLabel(c.date, now); got != c.want {
+			t.Errorf("DateLabel(%s, now=%s) = %q, want %q", c.date, c.now, got, c.want)
+		}
 	}
 }

@@ -76,7 +76,10 @@ func (e TimeEntry) end(now time.Time) time.Time {
 func splitDays(start, end time.Time, fn func(day string, d time.Duration)) {
 	for start.Before(end) {
 		y, m, d := start.Date()
-		next := time.Date(y, m, d+1, 0, 0, 0, 0, start.Location())
+		next := startOfDay(y, m, d+1, start.Location())
+		if !next.After(start) {
+			next = start.Add(time.Hour) // never stall, whatever the zone does
+		}
 		seg := end
 		if next.Before(end) {
 			seg = next
@@ -84,6 +87,23 @@ func splitDays(start, end time.Time, fn func(day string, d time.Duration)) {
 		fn(start.Format(DateLayout), seg.Sub(start))
 		start = seg
 	}
+}
+
+// startOfDay returns the first instant of the calendar day y-m-d in loc. The
+// day may be out of range (e.g. d+1) and is normalised like time.Date. Unlike
+// time.Date alone it never lands on the previous day: where a DST change
+// skips midnight (America/Santiago, America/Havana), time.Date(…, 0, 0, …)
+// yields 23:00 the day before, so the result is moved forward into the day.
+func startOfDay(y int, m time.Month, d int, loc *time.Location) time.Time {
+	y, m, d = time.Date(y, m, d, 12, 0, 0, 0, loc).Date() // noon always exists
+	t := time.Date(y, m, d, 0, 0, 0, 0, loc)
+	for i := 0; i < 24; i++ {
+		if ty, tm, td := t.Date(); ty == y && tm == m && td == d {
+			break
+		}
+		t = t.Add(time.Hour)
+	}
+	return t
 }
 
 // StartTimer stops any other running timer and starts one on t.

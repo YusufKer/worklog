@@ -102,6 +102,9 @@ func launch(path string, args []string, dir string, requireDone bool,
 	go func() {
 		defer close(events)
 		done := read(stdout, emit)
+		// If read stopped early (e.g. a line too long to scan), keep draining
+		// stdout; otherwise the child blocks on a full pipe and Wait hangs.
+		io.Copy(io.Discard, stdout)
 		waitErr := cmd.Wait()
 		if done {
 			return

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,50 @@ func TestRenderRoundTrip(t *testing.T) {
 			got.Agent.Model != c.Agent.Model || got.Agent.ClaudePath != c.Agent.ClaudePath ||
 			got.Agent.Name != c.Agent.Name || strings.Join(got.Agent.Command, "|") != strings.Join(c.Agent.Command, "|") {
 			t.Errorf("round trip: got %+v, want %+v", got, c)
+		}
+	}
+}
+
+// quote used strconv.Quote, whose \a, \v and \xNN escapes aren't valid TOML,
+// so Render could write a config that Load then rejected.
+func TestRenderQuotesTOMLStrings(t *testing.T) {
+	odd := "bell\a vt\v tab\t quote\" back\\ nl\n del\x7f ünï 日本 \U0001F600"
+	c := Config{
+		Dir:   odd,
+		Agent: Agent{Model: odd, ClaudePath: "/p\a", Name: "n\v", Command: []string{"sh", "-c", odd, "bad\xffutf8"}},
+	}
+	got, err := Parse([]byte(Render(c)))
+	if err != nil {
+		t.Fatalf("parse rendered: %v\n%s", err, Render(c))
+	}
+	if got.Dir != odd || got.Agent.Model != odd || got.Agent.ClaudePath != "/p\a" || got.Agent.Name != "n\v" {
+		t.Errorf("round trip: got %+v", got)
+	}
+	if len(got.Agent.Command) != 4 || got.Agent.Command[2] != odd {
+		t.Errorf("command round trip: %q", got.Agent.Command)
+	}
+	if got.Agent.Command[3] != "bad�utf8" {
+		t.Errorf("invalid UTF-8 should become U+FFFD, got %q", got.Agent.Command[3])
+	}
+	if strings.Contains(Render(c), `\x`) {
+		t.Errorf("rendered TOML contains a \\x escape:\n%s", Render(c))
+	}
+}
+
+func TestStaleTimerHoursValidation(t *testing.T) {
+	for _, h := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -1, MaxStaleTimerHours + 1, 1e300} {
+		if err := (Config{StaleTimerHours: h}).Validate(); err == nil || !strings.Contains(err.Error(), "stale_timer_hours") {
+			t.Errorf("stale_timer_hours = %v: err = %v", h, err)
+		}
+	}
+	for _, h := range []float64{0, 0.5, 4, MaxStaleTimerHours} {
+		if err := (Config{StaleTimerHours: h}).Validate(); err != nil {
+			t.Errorf("stale_timer_hours = %v: unexpected %v", h, err)
+		}
+	}
+	for _, body := range []string{"stale_timer_hours = nan\n", "stale_timer_hours = inf\n", "stale_timer_hours = 1e9\n"} {
+		if _, err := Load(write(t, body)); err == nil || !strings.Contains(err.Error(), "stale_timer_hours") {
+			t.Errorf("%q: err = %v", body, err)
 		}
 	}
 }

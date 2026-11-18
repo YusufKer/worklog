@@ -53,6 +53,47 @@ func TestBuildWeek(t *testing.T) {
 	}
 }
 
+func TestBuildWeekAcrossSkippedMidnight(t *testing.T) {
+	// Sunday 2026-09-06 has no midnight in Chile (DST starts at 00:00), so a
+	// naive Day(6) lands on Saturday 23:00 and Sunday vanishes from the week.
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skip(err)
+	}
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, loc)
+	start := WeekStart(time.Date(2026, 9, 6, 12, 0, 0, 0, loc))
+	if got := start.Format("2006-01-02 15:04 Mon"); got != "2026-08-31 00:00 Mon" {
+		t.Fatalf("WeekStart = %s", got)
+	}
+	todos := []*Todo{{Title: "Sunday", Time: []TimeEntry{
+		{Start: time.Date(2026, 9, 5, 22, 0, 0, 0, loc), End: ptr(time.Date(2026, 9, 6, 3, 0, 0, 0, loc))}, // 2h Sat, 2h Sun
+	}}}
+	w := BuildWeek(todos, start, now)
+
+	var dates []string
+	for i := range 7 {
+		dates = append(dates, w.Day(i).Format(DateLayout))
+	}
+	want := []string{"2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06"}
+	for i := range want {
+		if dates[i] != want[i] {
+			t.Fatalf("days = %v, want %v", dates, want)
+		}
+	}
+	if got := w.Day(6).Format("2006-01-02 15:04"); got != "2026-09-06 01:00" {
+		t.Errorf("Day(6) = %s, want the first instant of Sunday", got)
+	}
+	if w.Label() != "2026-W36 · Aug 31 – Sep 6" {
+		t.Errorf("label = %q", w.Label())
+	}
+	if w.Days[5] != 2*time.Hour || w.Days[6] != 2*time.Hour || w.Total != 4*time.Hour {
+		t.Errorf("days = %v total = %v", w.Days, w.Total)
+	}
+	if csv := w.CSV(); !strings.Contains(csv, "2026-09-05,2026-09-06,Total") {
+		t.Errorf("csv header:\n%s", csv)
+	}
+}
+
 func TestParseWeek(t *testing.T) {
 	now := at("2026-11-18 12:00") // Wednesday of 2026-W47
 	for in, want := range map[string]string{

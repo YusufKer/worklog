@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -58,7 +59,8 @@ func (b BadFile) String() string { return b.Name + ": " + b.Err.Error() }
 
 // LoadAll reads every .md file in the directory, sorted newest date first.
 // Files that can't be read or parsed are skipped and returned as bad, so
-// one broken file doesn't hide the rest.
+// one broken file doesn't hide the rest. Hidden files (such as the .tmp-*
+// files Save writes before renaming) are not todos and are ignored.
 func (s *Store) LoadAll() (todos []*Todo, bad []BadFile, err error) {
 	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.md"))
 	if err != nil {
@@ -66,6 +68,9 @@ func (s *Store) LoadAll() (todos []*Todo, bad []BadFile, err error) {
 	}
 	todos = make([]*Todo, 0, len(paths))
 	for _, p := range paths {
+		if strings.HasPrefix(filepath.Base(p), ".") {
+			continue
+		}
 		t, err := Load(p)
 		if err != nil {
 			bad = append(bad, BadFile{Name: filepath.Base(p), Err: err})
@@ -113,26 +118,55 @@ func Load(path string) (*Todo, error) {
 }
 
 // Parse splits frontmatter from the body. Files without frontmatter are
-// treated as notes only.
+// treated as notes only, as are files whose leading "---" block is not YAML
+// (e.g. notes opening with a horizontal rule). A block that looks like
+// frontmatter but can't be parsed is an error, so a broken todo is reported
+// rather than silently loaded as notes.
 func Parse(data []byte) (*Todo, error) {
 	t := &Todo{}
 	text := string(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")))
+	text = strings.TrimPrefix(text, "\uFEFF")
 	if !strings.HasPrefix(text, "---\n") {
 		t.Notes = text
 		return t, nil
 	}
-	rest := text[len("---\n"):]
+	// Search from the opening line's newline so an empty block ("---\n---")
+	// is found too.
+	rest := text[len("---"):]
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
+		if !looksLikeYAML(rest) {
+			t.Notes = text
+			return t, nil
+		}
 		return nil, fmt.Errorf("unterminated frontmatter")
 	}
-	if err := yaml.Unmarshal([]byte(rest[:end]), t); err != nil {
+	fm := strings.TrimPrefix(rest[:end], "\n")
+	if err := yaml.Unmarshal([]byte(fm), t); err != nil {
+		if !looksLikeYAML(fm) {
+			return &Todo{Notes: text}, nil
+		}
 		return nil, fmt.Errorf("frontmatter: %w", err)
 	}
 	body := rest[end+len("\n---"):]
 	body = strings.TrimPrefix(body, "\n")
 	t.Notes = strings.TrimPrefix(body, "\n")
 	return t, nil
+}
+
+var yamlKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*:(\s|$)`)
+
+// looksLikeYAML reports whether a "---" block was meant as frontmatter: its
+// first non-blank line is a "key:" pair. Anything else (prose, a heading)
+// is Markdown following a horizontal rule.
+func looksLikeYAML(block string) bool {
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return yamlKey.MatchString(line)
+	}
+	return true // empty frontmatter is fine
 }
 
 // Create makes a new todo for the given date and writes it to disk.
@@ -205,10 +239,14 @@ func hasBase(name, base string) bool {
 	return ok && n != "" && strings.Trim(n, "0123456789") == ""
 }
 
-func (s *Store) uniquePath(base string) string {
-	p := filepath.Join(s.Dir, base+".md")
+func (s *Store) uniquePath(base string) string { return uniqueFile(s.Dir, base) }
+
+// uniqueFile returns dir/base.md, or the first dir/base-N.md (N >= 2) that
+// doesn't exist yet.
+func uniqueFile(dir, base string) string {
+	p := filepath.Join(dir, base+".md")
 	for i := 2; fileExists(p); i++ {
-		p = filepath.Join(s.Dir, fmt.Sprintf("%s-%d.md", base, i))
+		p = filepath.Join(dir, fmt.Sprintf("%s-%d.md", base, i))
 	}
 	return p
 }
@@ -254,11 +292,8 @@ func (s *Store) Delete(t *Todo) error {
 	if err := os.MkdirAll(trash, 0o755); err != nil {
 		return err
 	}
-	dest := filepath.Join(trash, filepath.Base(t.Path))
-	if fileExists(dest) {
-		dest = filepath.Join(trash, fmt.Sprintf("%s-%d.md",
-			strings.TrimSuffix(filepath.Base(t.Path), ".md"), time.Now().Unix()))
-	}
+	// Never overwrite an earlier deletion of the same name.
+	dest := uniqueFile(trash, strings.TrimSuffix(filepath.Base(t.Path), ".md"))
 	if err := os.Rename(t.Path, dest); err != nil {
 		return err
 	}
@@ -280,7 +315,8 @@ func (s *Store) Backup(t *Todo) (string, error) {
 		return "", err
 	}
 	name := strings.TrimSuffix(filepath.Base(t.Path), ".md")
-	dest := filepath.Join(trash, fmt.Sprintf("%s.%s.md", name, time.Now().Format("20060102-150405")))
+	// Two backups within a second get -2, -3, … rather than overwriting.
+	dest := uniqueFile(trash, name+"."+time.Now().Format("20060102-150405"))
 	return dest, os.WriteFile(dest, data, 0o644)
 }
 
@@ -293,7 +329,7 @@ type Trashed struct {
 	Backup   bool // a conflict backup rather than a deleted todo
 }
 
-var backupSuffix = regexp.MustCompile(`\.\d{8}-\d{6}\.md$`)
+var backupSuffix = regexp.MustCompile(`\.\d{8}-\d{6}(-\d+)?\.md$`)
 
 // Trash lists .trash/, most recently modified first.
 func (s *Store) Trash() ([]Trashed, error) {
@@ -321,8 +357,9 @@ func (s *Store) Trash() ([]Trashed, error) {
 
 // Restore moves a file from .trash/ back into the directory, named after
 // its date and title. If its ID is already used by one of existing (e.g. a
-// backup of a todo that still exists), it gets a new ID and no agent
-// session, so the two don't share a conversation.
+// backup of a todo that still exists), it gets a new ID, no agent session
+// and no time entries, so the two don't share a conversation and the time
+// (possibly a running timer) isn't counted twice.
 func (s *Store) Restore(name string, existing []*Todo) (*Todo, error) {
 	src := filepath.Join(s.Dir, ".trash", filepath.Base(name))
 	t, err := Load(src)
@@ -333,6 +370,7 @@ func (s *Store) Restore(name string, existing []*Todo) (*Todo, error) {
 		if e.ID == t.ID {
 			t.ID = Slugify(t.Title) + "-" + randHex(3)
 			t.Session = ""
+			t.Time = nil
 			break
 		}
 	}
@@ -457,8 +495,13 @@ func DateLabel(date string, now time.Time) string {
 	if err != nil {
 		return date
 	}
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	switch days := int(today.Sub(d).Hours() / 24); {
+	// Count days between noons, rounded: a DST change makes a day 23 or 25
+	// hours long, which would otherwise be truncated to the wrong day.
+	noon := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 12, 0, 0, 0, now.Location())
+	}
+	diff := noon(now.Date()).Sub(noon(d.Date()))
+	switch days := int(math.Round(diff.Hours() / 24)); {
 	case days == 0:
 		return "Today"
 	case days == 1:

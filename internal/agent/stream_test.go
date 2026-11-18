@@ -3,8 +3,11 @@ package agent
 import (
 	"bufio"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/stream.jsonl is a real (trimmed) capture of
@@ -89,21 +92,108 @@ func TestParseErrorResult(t *testing.T) {
 }
 
 func TestArgs(t *testing.T) {
-	args := strings.Join(Claude{Model: "sonnet"}.Args(Options{Message: "hi", Session: "abc", SystemPrompt: "sys"}), " ")
-	for _, want := range []string{"-p hi", "--output-format stream-json", "--resume abc", "--append-system-prompt sys", "--tools " + Tools, "--model sonnet"} {
+	argv := Claude{Model: "sonnet"}.Args(Options{Message: "hi", Session: "abc", SystemPrompt: "sys"})
+	args := strings.Join(argv, " ")
+	for _, want := range []string{"-p --", "--output-format stream-json", "--resume abc", "--append-system-prompt sys", "--tools " + Tools, "--model sonnet"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args missing %q: %s", want, args)
 		}
+	}
+	// -p is a boolean flag; the prompt is positional and must come after
+	// "--" so a message like "- buy milk" or "--help" isn't read as an option.
+	last := func(argv []string) string {
+		if len(argv) < 2 || argv[len(argv)-2] != "--" {
+			t.Fatalf("message should follow --: %q", argv)
+		}
+		return argv[len(argv)-1]
+	}
+	if got := last(Claude{}.Args(Options{Message: "--help"})); got != "--help" {
+		t.Errorf("message = %q", got)
 	}
 
 	// Resumed runs name the current notes file in the message; new ones
 	// rely on the system prompt.
 	resumed := Claude{}.Args(Options{Message: "hi", Session: "abc", NotesFile: "/d/2026-11-19-x.md"})
-	if resumed[1] != "[Notes file: /d/2026-11-19-x.md]\n\nhi" {
-		t.Errorf("resumed message = %q", resumed[1])
+	if got := last(resumed); got != "[Notes file: /d/2026-11-19-x.md]\n\nhi" {
+		t.Errorf("resumed message = %q", got)
 	}
 	fresh := Claude{}.Args(Options{Message: "hi", NotesFile: "/d/2026-11-19-x.md"})
-	if fresh[1] != "hi" {
-		t.Errorf("new message = %q", fresh[1])
+	if got := last(fresh); got != "hi" {
+		t.Errorf("new message = %q", got)
+	}
+}
+
+// fakeClaude writes a stand-in claude script and returns a backend using it.
+func fakeClaude(t *testing.T, script string) Claude {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return Claude{Bin: p}
+}
+
+func TestClaudeFakeRun(t *testing.T) {
+	// The prompt is the last argument; echo it back in the result line.
+	c := fakeClaude(t, `for a; do p="$a"; done
+printf '{"type":"system","subtype":"init","session_id":"s1"}\n'
+printf '{"type":"result","subtype":"success","result":"%s","total_cost_usd":0.01}\n' "$p"
+`)
+	run, err := c.Start(Options{Dir: t.TempDir(), Message: "- buy milk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session string
+	var done EvDone
+	for ev := range run.Events {
+		switch e := ev.(type) {
+		case EvSession:
+			session = e.ID
+		case EvDone:
+			done = e
+		}
+	}
+	if session != "s1" || done.IsError || done.CostUSD != 0.01 {
+		t.Errorf("session = %q, done = %+v", session, done)
+	}
+}
+
+// A line longer than the scanner allows used to stop reading stdout, which
+// left the child blocked on a full pipe and the run hanging forever.
+func TestClaudeLongLineDoesNotHang(t *testing.T) {
+	c := fakeClaude(t, `printf '{"type":"system","subtype":"init","session_id":"s1"}\n'
+head -c `+strconv.Itoa(maxLine+1024*1024)+` /dev/zero | tr '\0' x
+printf '\n{"type":"result","subtype":"success","result":"ok"}\n'
+`)
+	run, err := c.Start(Options{Dir: t.TempDir(), Message: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		done  EvDone
+		count int
+	}
+	res := make(chan outcome, 1)
+	go func() {
+		var o outcome
+		for ev := range run.Events {
+			if d, ok := ev.(EvDone); ok {
+				o.done = d
+				o.count++
+			}
+		}
+		res <- o
+	}()
+	select {
+	case o := <-res:
+		if o.count != 1 {
+			t.Errorf("got %d EvDone, want 1", o.count)
+		}
+		if !o.done.IsError || !strings.Contains(o.done.Message, "too long") {
+			t.Errorf("done = %+v, want a 'line too long' error", o.done)
+		}
+	case <-time.After(20 * time.Second):
+		run.Cancel()
+		t.Fatal("run hung after an over-long output line")
 	}
 }

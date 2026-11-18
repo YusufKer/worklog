@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 )
+
+// MaxStaleTimerHours is the largest stale_timer_hours Validate accepts.
+const MaxStaleTimerHours = 24 * 365
 
 // Config is the contents of config.toml. Every field is optional.
 type Config struct {
@@ -173,7 +177,39 @@ func Render(c Config) string {
 	return b.String()
 }
 
-func quote(s string) string { return strconv.Quote(s) }
+// quote renders s as a TOML basic string. strconv.Quote is not used because
+// it emits Go escapes TOML rejects (\a, \v, \xNN). Invalid UTF-8 becomes
+// U+FFFD, which is what ranging over the string yields.
+func quote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
 
 func strconvFloat(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
@@ -246,8 +282,13 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("config: agent.type must be \"claude\" or \"command\", not %q", c.Agent.Type)
 	}
-	if c.StaleTimerHours < 0 {
+	switch h := c.StaleTimerHours; {
+	case math.IsNaN(h) || math.IsInf(h, 0):
+		return errors.New("config: stale_timer_hours must be a number of hours")
+	case h < 0:
 		return errors.New("config: stale_timer_hours must be positive")
+	case h > MaxStaleTimerHours:
+		return fmt.Errorf("config: stale_timer_hours must be at most %d (one year)", MaxStaleTimerHours)
 	}
 	return nil
 }

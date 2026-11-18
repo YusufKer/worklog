@@ -27,7 +27,7 @@ type WeekRow struct {
 func WeekStart(t time.Time) time.Time {
 	y, m, d := t.Date()
 	offset := (int(t.Weekday()) + 6) % 7 // days since Monday
-	return time.Date(y, m, d-offset, 0, 0, 0, 0, t.Location())
+	return startOfDay(y, m, d-offset, t.Location())
 }
 
 // BuildWeek totals time tracked in the week starting at start (a Monday,
@@ -98,10 +98,10 @@ func ParseWeek(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("can't read week %q: use this, last, -N, YYYY-Www or YYYY-MM-DD", s)
 }
 
-// Day returns midnight on the i-th day of the week (0 = Monday).
+// Day returns the start of the i-th day of the week (0 = Monday).
 func (w Week) Day(i int) time.Time {
 	y, m, d := w.Start.Date()
-	return time.Date(y, m, d+i, 0, 0, 0, 0, w.Start.Location())
+	return startOfDay(y, m, d+i, w.Start.Location())
 }
 
 // Name is the ISO week, e.g. "2026-W47".

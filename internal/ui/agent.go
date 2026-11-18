@@ -36,10 +36,11 @@ type entry struct {
 
 // conversation is the transcript and in-flight run for one todo.
 type conversation struct {
-	entries []entry
-	run     *agent.Run
-	session string // session ID reported by the current run
-	resumed bool   // the current run resumed an earlier session
+	entries   []entry
+	run       *agent.Run
+	session   string // session ID reported by the current run
+	resumed   bool   // the current run resumed an earlier session
+	resumable bool   // the backend that started the current run keeps sessions
 }
 
 func (c *conversation) add(kind entryKind, text string) {
