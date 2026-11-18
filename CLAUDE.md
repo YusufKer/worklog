@@ -26,7 +26,7 @@ There are no UI tests; `internal/ui` is verified by running the app. Avoid runni
 - `Save` is atomic (temp file + rename). **Mutations go through `Store.Update(t, fn)`**, which re-reads from disk before applying `fn`, because the agent edits the same files concurrently. Don't write a stale in-memory `Todo` back with `Save` directly.
 - `Edit` (rename/reschedule) renames the file to `date-slug.md` but keeps the `id`; UI state (agent conversations, editor) is keyed by ID, not path. Delete moves files to `.trash/`.
 - `GroupByDate` builds the list's date groups; unfinished todos from earlier days are *displayed* under Today (`Group.Carried`) without changing their `date`.
-- `timer.go`: time entries live in frontmatter `time:`; an open entry (no `end`) is the running timer. Only one runs at a time (`StartTimer` stops others). Totals split entries across midnight (`splitDays`). `Stale` drives the startup "forgotten timer" modal.
+- `timer.go`: time entries live in frontmatter `time:`; an open entry (no `end`) is the running timer. Only one runs at a time (`StartTimer` stops others). Totals split entries across midnight (`splitDays`). `Stale` drives the startup "forgotten timer" modal. Entries are identified by their `Start` (`PutTimeEntry`/`DeleteTimeEntry`), not by index, because `Update` re-reads the file.
 
 ### internal/agent — pluggable backends
 - `Backend` interface (`Name`, `Resumable`, `Start`) returns a `Run` whose `Events` channel emits `Ev*` structs and always ends with exactly one `EvDone`. `launch()` handles process lifecycle, cancellation, and stderr capture for both backends.

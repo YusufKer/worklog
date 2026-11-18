@@ -153,3 +153,68 @@ func TestFormat(t *testing.T) {
 		t.Errorf("FormatClock = %q", got)
 	}
 }
+
+func TestPutAndDeleteTimeEntry(t *testing.T) {
+	s, _ := New(t.TempDir())
+	td, _ := s.Create("A", "2026-11-17")
+	now := at("2026-11-17 18:00")
+	load := func() *Todo { x, _ := Load(td.Path); return x }
+	entry := func(start, end string) TimeEntry {
+		e := TimeEntry{Start: at(start)}
+		if end != "" {
+			e.End = ptr(at(end))
+		}
+		return e
+	}
+
+	// Added out of order; stored by start time.
+	if err := s.PutTimeEntry(td, time.Time{}, entry("2026-11-17 13:00", "2026-11-17 14:00"), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutTimeEntry(td, time.Time{}, entry("2026-11-17 09:00", "2026-11-17 10:30"), now); err != nil {
+		t.Fatal(err)
+	}
+	if got := load(); len(got.Time) != 2 || !got.Time[0].Start.Equal(at("2026-11-17 09:00")) || got.Total(now) != 150*time.Minute {
+		t.Fatalf("after add: %+v", got.Time)
+	}
+
+	for name, e := range map[string]TimeEntry{
+		"overlap":      entry("2026-11-17 10:00", "2026-11-17 11:00"),
+		"end <= start": entry("2026-11-17 15:00", "2026-11-17 15:00"),
+		"future end":   entry("2026-11-17 17:00", "2026-11-17 19:00"),
+		"no end":       entry("2026-11-17 15:00", ""),
+	} {
+		if err := s.PutTimeEntry(td, time.Time{}, e, now); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+
+	// Editing an entry may move it within its own old span.
+	if err := s.PutTimeEntry(td, at("2026-11-17 09:00"), entry("2026-11-17 09:30", "2026-11-17 12:00"), now); err != nil {
+		t.Fatal(err)
+	}
+	if got := load().Total(now); got != 3*time.Hour+30*time.Minute {
+		t.Fatalf("after edit total = %v", got)
+	}
+	if err := s.PutTimeEntry(td, at("2026-11-17 08:00"), entry("2026-11-17 08:00", "2026-11-17 08:30"), now); err == nil {
+		t.Error("expected error editing a missing entry")
+	}
+
+	// A running entry may keep running when edited, e.g. to fix its start.
+	if err := s.StartTimer(load(), nil, at("2026-11-17 16:00")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutTimeEntry(td, at("2026-11-17 16:00"), entry("2026-11-17 15:00", ""), now); err != nil {
+		t.Fatal(err)
+	}
+	if r := load().Running(); r == nil || !r.Start.Equal(at("2026-11-17 15:00")) {
+		t.Fatalf("running = %+v", r)
+	}
+
+	if err := s.DeleteTimeEntry(td, at("2026-11-17 13:00")); err != nil {
+		t.Fatal(err)
+	}
+	if got := load(); len(got.Time) != 2 {
+		t.Fatalf("after delete: %+v", got.Time)
+	}
+}

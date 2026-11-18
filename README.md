@@ -60,6 +60,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `,` | settings |
 | | `?` | show all keys |
 | | `t` | start/stop the timer (one at a time) |
+| | `T` | time entries: add (`a`), edit (`enter`), delete (`d`) |
 | | `a` / `i` | ask the agent |
 | notes | `j`/`k`, `g`/`G` | scroll |
 | | `esc` / `h` | back to list |
@@ -72,6 +73,10 @@ worklog -demo       # try it on sample data in a temp directory
 
 Date fields take `YYYY-MM-DD` or a shortcut: `today`, `tomorrow`,
 `yesterday`, `+N` / `-N` days from today.
+
+In the time entries editor, Start takes `HH:MM` or `YYYY-MM-DD HH:MM`; End
+also takes a duration like `1h30m`. Leave End empty to keep a running timer
+running. A todo's entries can't overlap or be in the future.
 
 If a timer has been running since an earlier day, or longer than
 `stale_timer_hours`, worklog asks on startup whether to stop it at a given

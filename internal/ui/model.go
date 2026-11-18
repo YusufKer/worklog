@@ -58,6 +58,7 @@ type Model struct {
 	modal modalKind
 	form  todoForm
 	stale staleTimerForm
+	times timeLog
 	kept  map[string]bool // stale timers the user chose to keep running
 
 	ticking bool   // a timer tick loop is active
@@ -270,6 +271,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.modal == modalSettings {
 		return m, m.settings.update(msg)
 	}
+	if m.modal == modalTime && m.times.editing {
+		var cmd tea.Cmd
+		*m.times.input(), cmd = m.times.input().Update(msg)
+		return m, cmd
+	}
 	if m.notes.editing {
 		var cmd tea.Cmd
 		m.notes.ta, cmd = m.notes.ta.Update(msg)
@@ -418,12 +424,7 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 // finishRun stores the session ID so the next prompt continues the same
 // conversation, or forgets it if it could not be resumed.
 func (m *Model) finishRun(todoID string, done agent.EvDone) {
-	var t *store.Todo
-	for _, x := range m.list.all {
-		if x.ID == todoID {
-			t = x
-		}
-	}
+	t := m.todoByID(todoID)
 	if t == nil {
 		return
 	}
@@ -470,6 +471,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "?":
 		m.modal = modalKeys
+	case "T":
+		m.openTimeLog()
 	case "/":
 		m.list.typing = true
 		m.list.filter.CursorEnd()
@@ -527,6 +530,9 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openSettings()
 	case "?":
 		m.modal = modalKeys
+		return m, nil
+	case "T":
+		m.openTimeLog()
 		return m, nil
 	case "g", "home":
 		m.notes.vp.GotoTop()
@@ -749,6 +755,9 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = modalNone // any key closes it
 		return m, nil
 
+	case modalTime:
+		return m.updateTimeLog(msg)
+
 	case modalDelete:
 		switch msg.String() {
 		case "y", "Y", "enter":
@@ -793,6 +802,100 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.form.update(msg)
 	}
 	return m, nil
+}
+
+func (m Model) todoByID(id string) *store.Todo {
+	for _, t := range m.list.all {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
+
+func (m *Model) openTimeLog() {
+	if t := m.list.selected(); t != nil {
+		m.modal = modalTime
+		m.times = newTimeLog(t)
+	}
+}
+
+// updateTimeLog handles the time entries modal: a list of entries, a form
+// for adding or editing one, and a delete confirmation.
+func (m Model) updateTimeLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f, now := &m.times, time.Now()
+	var err error
+	switch {
+	case f.editing:
+		switch msg.String() {
+		case "esc":
+			f.editing = false
+			return m, nil
+		case "tab", "shift+tab", "up", "down":
+			f.switchField()
+			return m, nil
+		case "enter":
+			var e store.TimeEntry
+			if e, err = f.entry(now); err == nil {
+				err = m.store.PutTimeEntry(f.todo, f.old, e, now)
+			}
+			if err != nil {
+				f.err = capitalize(err.Error())
+				return m, nil
+			}
+			f.editing = false
+		default:
+			f.err = ""
+			var cmd tea.Cmd
+			*f.input(), cmd = f.input().Update(msg)
+			return m, cmd
+		}
+
+	case f.deleting:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			f.deleting = false
+			if e, ok := f.selected(); ok {
+				err = m.store.DeleteTimeEntry(f.todo, e.Start)
+			}
+		case "n", "N", "esc", "q":
+			f.deleting = false
+			return m, nil
+		default:
+			return m, nil
+		}
+
+	default:
+		f.err = ""
+		switch msg.String() {
+		case "esc", "q", "T":
+			m.modal = modalNone
+		case "j", "down":
+			f.move(1)
+		case "k", "up":
+			f.move(-1)
+		case "a", "n":
+			f.add(now)
+			return m, textinput.Blink
+		case "enter", "e":
+			if f.edit() {
+				return m, textinput.Blink
+			}
+		case "d", "x":
+			_, f.deleting = f.selected()
+		}
+		return m, nil
+	}
+
+	if err != nil {
+		f.err = capitalize(err.Error())
+	}
+	m.reloadKeepSelection()
+	if t := m.todoByID(f.todo.ID); t != nil {
+		f.setTodo(t)
+	}
+	m.checkStale()
+	return m, m.ensureTick()
 }
 
 func (m *Model) toggleDone() {
@@ -917,6 +1020,8 @@ func (m Model) View() string {
 		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
 	case modalKeys:
 		body = overlay(body, keysView(), m.width, bodyH)
+	case modalTime:
+		body = overlay(body, m.times.view(time.Now()), m.width, bodyH)
 	case modalStaleTimer:
 		body = overlay(body, m.stale.view(time.Now()), m.width, bodyH)
 	case modalSettings:
@@ -975,6 +1080,12 @@ func (m Model) footerLeft() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", action}, {"esc", "cancel"}})
 	case m.modal == modalKeys:
 		return renderHelp([]hint{{"any key", "close"}})
+	case m.modal == modalTime && m.times.editing:
+		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "save"}, {"esc", "cancel"}})
+	case m.modal == modalTime && m.times.deleting:
+		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.modal == modalTime:
+		return renderHelp([]hint{{"j/k", "move"}, {"a", "add"}, {"enter/e", "edit"}, {"d", "delete"}, {"esc", "close"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
 	case m.modal == modalSettings && m.settings.raw:

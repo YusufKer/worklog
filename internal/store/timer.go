@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -60,6 +61,9 @@ func (e TimeEntry) Stale(now time.Time, maxRun time.Duration) bool {
 	return e.Start.In(now.Location()).Format(DateLayout) != now.Format(DateLayout) ||
 		now.Sub(e.Start) > maxRun
 }
+
+// Duration is the entry's length, counting a running entry up to now.
+func (e TimeEntry) Duration(now time.Time) time.Duration { return e.end(now).Sub(e.Start) }
 
 func (e TimeEntry) end(now time.Time) time.Time {
 	if e.End != nil {
@@ -126,6 +130,77 @@ func (s *Store) DiscardTimer(t *Todo) error {
 		kept := x.Time[:0]
 		for _, e := range x.Time {
 			if e.End != nil {
+				kept = append(kept, e)
+			}
+		}
+		x.Time = kept
+	})
+	return err
+}
+
+// PutTimeEntry adds e to t, or replaces the entry that started at old when
+// old is non-zero. Entries are kept in start order. Only the running entry
+// may be left without an end, and entries on one todo may not overlap.
+func (s *Store) PutTimeEntry(t *Todo, old time.Time, e TimeEntry, now time.Time) error {
+	var putErr error
+	_, err := s.Update(t, func(x *Todo) {
+		var others []TimeEntry
+		var replaced *TimeEntry
+		for i := range x.Time {
+			if !old.IsZero() && x.Time[i].Start.Equal(old) && replaced == nil {
+				replaced = &x.Time[i]
+				continue
+			}
+			others = append(others, x.Time[i])
+		}
+		if !old.IsZero() && replaced == nil {
+			putErr = fmt.Errorf("that time entry no longer exists")
+			return
+		}
+		if putErr = checkEntry(e, replaced, others, now); putErr != nil {
+			return
+		}
+		x.Time = append(others, e)
+		sort.SliceStable(x.Time, func(i, j int) bool { return x.Time[i].Start.Before(x.Time[j].Start) })
+	})
+	if putErr != nil {
+		return putErr
+	}
+	return err
+}
+
+func checkEntry(e TimeEntry, replaced *TimeEntry, others []TimeEntry, now time.Time) error {
+	switch {
+	case e.Start.After(now):
+		return fmt.Errorf("start can't be in the future")
+	case e.End == nil && (replaced == nil || replaced.End != nil):
+		return fmt.Errorf("end is required (use t to start a timer)")
+	case e.End != nil && !e.End.After(e.Start):
+		return fmt.Errorf("end must be after start")
+	case e.End != nil && e.End.After(now):
+		return fmt.Errorf("end can't be in the future")
+	}
+	for _, o := range others {
+		if e.Start.Before(o.end(now)) && o.Start.Before(e.end(now)) {
+			return fmt.Errorf("overlaps %s–%s", o.Start.In(now.Location()).Format("Mon Jan 2 15:04"), clock(o, now))
+		}
+	}
+	return nil
+}
+
+func clock(e TimeEntry, now time.Time) string {
+	if e.End == nil {
+		return "now"
+	}
+	return e.End.In(now.Location()).Format("15:04")
+}
+
+// DeleteTimeEntry removes the entry that started at start.
+func (s *Store) DeleteTimeEntry(t *Todo, start time.Time) error {
+	_, err := s.Update(t, func(x *Todo) {
+		kept := x.Time[:0]
+		for _, e := range x.Time {
+			if !e.Start.Equal(start) {
 				kept = append(kept, e)
 			}
 		}
