@@ -13,6 +13,7 @@ go test ./internal/store -run TestCarryOver   # single test
 go vet ./...
 go run . -demo                     # run against a temp dir seeded with sample todos (see seedDemo in main.go)
 go run . -dir /tmp/wl -config /tmp/wl.toml    # isolate from the real ~/worklog and ~/.config/worklog
+go run . report -week last -csv -dir /tmp/wl  # CLI report (report.go)
 ```
 
 There are no UI tests; `internal/ui` is verified by running the app. Avoid running against the user's real `~/worklog` data when testing.
@@ -22,6 +23,7 @@ There are no UI tests; `internal/ui` is verified by running the app. Avoid runni
 `main.go` resolves the data dir (precedence: `-demo` > `-dir` > `$WORKLOG_DIR` > config `dir` > `~/worklog`), loads todos, and starts `ui.Model`. `DirOverridden` tells the settings screen the dir can't be changed in-app.
 
 ### internal/store — the files are the database
+- `.trash/` holds deleted todos and timestamped conflict backups (`Backup`); `Restore` gives a todo a new ID if its ID is already in use.
 - `LoadAll` skips unparseable files and returns them as `[]BadFile`; the UI shows a "skipped" count and never writes to them.
 - One `.md` file per todo: `YYYY-MM-DD-<slug>.md`, frontmatter (`Todo` struct, yaml tags) + notes body. `Parse`/`Marshal` round-trip it; files without frontmatter still load.
 - `Save` is atomic (temp file + rename). **Mutations go through `Store.Update(t, fn)`**, which re-reads from disk before applying `fn`, because the agent edits the same files concurrently. Don't write a stale in-memory `Todo` back with `Save` directly.

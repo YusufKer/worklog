@@ -38,7 +38,7 @@ type keySection struct {
 var keysLeft = []keySection{
 	{"List", []hint{
 		{"j/k ↑/↓", "move"}, {"g/G", "top/bottom"}, {"n", "new todo"}, {"r", "rename/reschedule"},
-		{"x space", "toggle done"}, {"d", "delete"}, {"/", "search"}, {".", "hide done"},
+		{"x space", "toggle done"}, {"d", "delete"}, {"u", "trash / restore"}, {"/", "search"}, {".", "hide done"},
 		{"esc", "clear filter"}, {"enter l", "go to notes"}, {"q", "quit"},
 	}},
 	{"Notes", []hint{{"j/k g/G", "scroll"}, {"esc h", "back to list"}}},

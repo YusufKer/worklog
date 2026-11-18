@@ -54,6 +54,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `esc` | clear search and show done todos |
 | | `x` / `space` | toggle done (also stops its timer) |
 | | `d` | delete (moved to `.trash/`) |
+| | `u` | trash: restore deleted todos and conflict backups |
 | | `enter` / `l` | go to notes |
 | | `q` | quit |
 | list, notes | `e` | edit notes inline |
@@ -82,6 +83,15 @@ running. A todo's entries can't overlap or be in the future.
 The week report shows time per todo and day (Monday–Sunday). `s` saves it
 as CSV in decimal hours to `reports/2026-W47.csv` in the data folder; `c`
 copies it as a Markdown table.
+
+From the command line, `worklog report` prints a week as Markdown, or CSV
+with `-csv`. `-week` takes `this` (default), `last`, `-N` weeks ago, an ISO
+week like `2026-W47`, or any date in the week. `-dir` and `-config` work as
+they do for the app:
+
+```sh
+worklog report -week last -csv > timesheet.csv
+```
 
 If a timer has been running since an earlier day, or longer than
 `stale_timer_hours`, worklog asks on startup whether to stop it at a given

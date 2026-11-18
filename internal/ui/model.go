@@ -61,6 +61,7 @@ type Model struct {
 	stale staleTimerForm
 	times timeLog
 	week  weekReport
+	trash trashList
 	kept  map[string]bool // stale timers the user chose to keep running
 
 	stamps  map[string]string // last poll of the data directory
@@ -487,6 +488,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openTimeLog()
 	case "W":
 		m.modal, m.week = modalWeek, newWeekReport(time.Now())
+	case "u":
+		m.openTrash()
 	case "/":
 		m.list.typing = true
 		m.list.filter.CursorEnd()
@@ -793,6 +796,9 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modalWeek:
 		return m.updateWeek(msg)
 
+	case modalTrash:
+		return m.updateTrash(msg)
+
 	case modalDelete:
 		switch msg.String() {
 		case "y", "Y", "enter":
@@ -971,6 +977,43 @@ func (m Model) updateWeek(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) openTrash() {
+	items, err := m.store.Trash()
+	if err != nil {
+		m.setStatus("Couldn't read the trash: "+err.Error(), true)
+		return
+	}
+	m.modal, m.trash = modalTrash, trashList{items: items}
+}
+
+func (m Model) updateTrash(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f := &m.trash
+	f.err = ""
+	switch msg.String() {
+	case "esc", "q", "u":
+		m.modal = modalNone
+	case "j", "down":
+		f.move(1)
+	case "k", "up":
+		f.move(-1)
+	case "enter", "r":
+		x, ok := f.selected()
+		if !ok {
+			break
+		}
+		t, err := m.store.Restore(x.Name, m.list.all)
+		if err != nil {
+			f.err = "Couldn't restore: " + err.Error()
+			break
+		}
+		m.modal = modalNone
+		m.list.clearFilter() // so the restored todo is visible
+		m.reload(t.ID)
+		m.setStatus("Restored “"+t.Title+"”", false)
+	}
+	return m, nil
+}
+
 func (m *Model) toggleDone() {
 	t := m.list.selected()
 	if t == nil {
@@ -999,7 +1042,7 @@ func (m *Model) deleteSelected() {
 		return
 	}
 	m.reload("")
-	m.setStatus("Deleted “"+t.Title+"” (moved to .trash/)", false)
+	m.setStatus("Deleted “"+t.Title+"” — u to restore", false)
 }
 
 // reload re-reads all todos from disk, keeping the cursor on selectID when
@@ -1124,6 +1167,8 @@ func (m Model) View() string {
 		body = overlay(body, keysView(), m.width, bodyH)
 	case modalTime:
 		body = overlay(body, m.times.view(time.Now()), m.width, bodyH)
+	case modalTrash:
+		body = overlay(body, m.trash.view(time.Now()), m.width, bodyH)
 	case modalWeek:
 		now := time.Now()
 		w, h := m.weekSize()
@@ -1190,6 +1235,8 @@ func (m Model) footerLeft() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "save"}, {"esc", "cancel"}})
 	case m.modal == modalTime && m.times.deleting:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.modal == modalTrash:
+		return renderHelp([]hint{{"j/k", "move"}, {"enter", "restore"}, {"esc", "close"}})
 	case m.modal == modalWeek:
 		return renderHelp([]hint{{"h/l", "prev/next week"}, {"t", "this week"}, {"j/k", "scroll"}, {"c", "copy Markdown"}, {"s", "save CSV"}, {"esc", "close"}})
 	case m.modal == modalTime:

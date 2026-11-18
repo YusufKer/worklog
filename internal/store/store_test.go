@@ -186,3 +186,59 @@ func TestLoadAllSkipsBadFiles(t *testing.T) {
 		t.Errorf("String() = %q", got)
 	}
 }
+
+func TestTrashAndRestore(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	gone, _ := s.Create("Gone", "2026-11-16")
+	gone, _ = s.Update(gone, func(x *Todo) { x.Session = "s1"; x.Notes = "deleted notes\n" })
+	kept, _ := s.Create("Kept", "2026-11-17")
+	kept, _ = s.Update(kept, func(x *Todo) { x.Session = "s2"; x.Notes = "old notes\n" })
+	if err := s.Delete(gone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Backup(kept); err != nil {
+		t.Fatal(err)
+	}
+
+	trash, err := s.Trash()
+	if err != nil || len(trash) != 2 {
+		t.Fatalf("trash = %+v (%v)", trash, err)
+	}
+	var del, bak Trashed
+	for _, x := range trash {
+		if x.Backup {
+			bak = x
+		} else {
+			del = x
+		}
+	}
+	if del.Todo == nil || del.Todo.Title != "Gone" || bak.Todo == nil || bak.Todo.Title != "Kept" {
+		t.Fatalf("deleted %+v backup %+v", del, bak)
+	}
+
+	existing, _, _ := s.LoadAll()
+	got, err := s.Restore(del.Name, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != gone.ID || got.Session != "s1" || filepath.Base(got.Path) != "2026-11-16-gone.md" {
+		t.Fatalf("restored deleted = %+v", got)
+	}
+
+	// The backup's todo still exists: restoring gives it a new identity.
+	existing, _, _ = s.LoadAll()
+	got, err = s.Restore(bak.Name, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID == kept.ID || got.Session != "" || got.Notes != "old notes\n" || filepath.Base(got.Path) != "2026-11-17-kept-2.md" {
+		t.Fatalf("restored backup = %+v", got)
+	}
+	if trash, _ := s.Trash(); len(trash) != 0 {
+		t.Fatalf("trash not emptied: %+v", trash)
+	}
+	if all, _, _ := s.LoadAll(); len(all) != 3 {
+		t.Fatalf("want 3 todos, got %d", len(all))
+	}
+}

@@ -15,6 +15,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "report" {
+		if err := report(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "worklog report:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	dirFlag := flag.String("dir", "", "data directory (overrides $WORKLOG_DIR and the config file)")
 	configFlag := flag.String("config", config.DefaultPath(), "config file")
 	demo := flag.Bool("demo", false, "run against a temporary directory seeded with sample todos")
@@ -32,30 +40,18 @@ func run(dirFlag, configPath string, demo bool) error {
 		return err
 	}
 
-	// Data directory: -demo, then -dir, then $WORKLOG_DIR, then config, then ~/worklog.
-	dir := dirFlag
-	switch {
-	case demo:
-		d, err := os.MkdirTemp("", "worklog-demo-")
-		if err != nil {
+	dir := dataDir(dirFlag, cfg)
+	if demo {
+		if dir, err = os.MkdirTemp("", "worklog-demo-"); err != nil {
 			return err
 		}
-		if err := seedDemo(d); err != nil {
+		if err := seedDemo(dir); err != nil {
 			return err
 		}
-		fmt.Println("demo data in", d)
-		dir = d
-	case dir == "":
-		dir = os.Getenv("WORKLOG_DIR")
-	}
-	if dir == "" {
-		dir = cfg.Dir
-	}
-	if dir == "" {
-		dir = "~/worklog"
+		fmt.Println("demo data in", dir)
 	}
 
-	s, err := store.New(config.ExpandHome(dir))
+	s, err := store.New(dir)
 	if err != nil {
 		return err
 	}
@@ -78,6 +74,17 @@ func run(dirFlag, configPath string, demo bool) error {
 	})
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+// dataDir picks the data directory: -dir, then $WORKLOG_DIR, then the
+// config file, then ~/worklog.
+func dataDir(dirFlag string, cfg config.Config) string {
+	for _, d := range []string{dirFlag, os.Getenv("WORKLOG_DIR"), cfg.Dir} {
+		if d != "" {
+			return config.ExpandHome(d)
+		}
+	}
+	return config.ExpandHome("~/worklog")
 }
 
 func seedDemo(dir string) error {

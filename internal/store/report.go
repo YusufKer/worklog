@@ -63,6 +63,41 @@ func BuildWeek(todos []*Todo, start, now time.Time) Week {
 	return w
 }
 
+// ParseWeek returns the Monday starting the week described by s: "this",
+// "last", "-N" (weeks ago), an ISO week such as "2026-W47", or a date
+// (YYYY-MM-DD) in the week.
+func ParseWeek(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	this := WeekStart(now)
+	weeksAgo := func(n int) time.Time {
+		return WeekStart(time.Date(this.Year(), this.Month(), this.Day()-7*n+1, 0, 0, 0, 0, now.Location()))
+	}
+	switch {
+	case s == "" || s == "this":
+		return this, nil
+	case s == "last":
+		return weeksAgo(1), nil
+	}
+	var n int
+	if _, err := fmt.Sscanf(s, "-%d", &n); err == nil && n >= 0 && fmt.Sprintf("-%d", n) == s {
+		return weeksAgo(n), nil
+	}
+	var year, week int
+	if _, err := fmt.Sscanf(s, "%d-w%d", &year, &week); err == nil && week >= 1 && week <= 53 {
+		// Week 1 is the week containing January 4th.
+		jan4 := time.Date(year, 1, 4, 0, 0, 0, 0, now.Location())
+		start := WeekStart(jan4).AddDate(0, 0, 7*(week-1))
+		if y, w := start.ISOWeek(); y != year || w != week {
+			return time.Time{}, fmt.Errorf("%d has no week %d", year, week)
+		}
+		return start, nil
+	}
+	if d, err := time.ParseInLocation(DateLayout, s, now.Location()); err == nil {
+		return WeekStart(d), nil
+	}
+	return time.Time{}, fmt.Errorf("can't read week %q: use this, last, -N, YYYY-Www or YYYY-MM-DD", s)
+}
+
 // Day returns midnight on the i-th day of the week (0 = Monday).
 func (w Week) Day(i int) time.Time {
 	y, m, d := w.Start.Date()

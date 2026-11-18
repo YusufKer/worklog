@@ -259,7 +259,13 @@ func (s *Store) Delete(t *Todo) error {
 		dest = filepath.Join(trash, fmt.Sprintf("%s-%d.md",
 			strings.TrimSuffix(filepath.Base(t.Path), ".md"), time.Now().Unix()))
 	}
-	return os.Rename(t.Path, dest)
+	if err := os.Rename(t.Path, dest); err != nil {
+		return err
+	}
+	// Record when it was deleted, for listing the trash.
+	now := time.Now()
+	os.Chtimes(dest, now, now)
+	return nil
 }
 
 // Backup copies the todo's file into .trash/ with a timestamp, for keeping a
@@ -276,6 +282,71 @@ func (s *Store) Backup(t *Todo) (string, error) {
 	name := strings.TrimSuffix(filepath.Base(t.Path), ".md")
 	dest := filepath.Join(trash, fmt.Sprintf("%s.%s.md", name, time.Now().Format("20060102-150405")))
 	return dest, os.WriteFile(dest, data, 0o644)
+}
+
+// Trashed is a file in .trash/: a deleted todo or a backup made by saving
+// over notes that changed on disk.
+type Trashed struct {
+	Name     string
+	Todo     *Todo // nil if the file can't be parsed
+	Modified time.Time
+	Backup   bool // a conflict backup rather than a deleted todo
+}
+
+var backupSuffix = regexp.MustCompile(`\.\d{8}-\d{6}\.md$`)
+
+// Trash lists .trash/, most recently modified first.
+func (s *Store) Trash() ([]Trashed, error) {
+	paths, err := filepath.Glob(filepath.Join(s.Dir, ".trash", "*.md"))
+	if err != nil {
+		return nil, err
+	}
+	var out []Trashed
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		t, _ := Load(p)
+		out = append(out, Trashed{
+			Name:     filepath.Base(p),
+			Todo:     t,
+			Modified: info.ModTime(),
+			Backup:   backupSuffix.MatchString(filepath.Base(p)),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
+	return out, nil
+}
+
+// Restore moves a file from .trash/ back into the directory, named after
+// its date and title. If its ID is already used by one of existing (e.g. a
+// backup of a todo that still exists), it gets a new ID and no agent
+// session, so the two don't share a conversation.
+func (s *Store) Restore(name string, existing []*Todo) (*Todo, error) {
+	src := filepath.Join(s.Dir, ".trash", filepath.Base(name))
+	t, err := Load(src)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range existing {
+		if e.ID == t.ID {
+			t.ID = Slugify(t.Title) + "-" + randHex(3)
+			t.Session = ""
+			break
+		}
+	}
+	if _, err := time.Parse(DateLayout, t.Date); err != nil {
+		t.Date = time.Now().Format(DateLayout)
+	}
+	t.Path = s.uniquePath(t.Date + "-" + Slugify(t.Title))
+	if err := s.Save(t); err != nil {
+		return nil, err
+	}
+	if err := os.Remove(src); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // Marshal renders a todo as frontmatter followed by its notes.

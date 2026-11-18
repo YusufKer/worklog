@@ -52,3 +52,29 @@ func TestBuildWeek(t *testing.T) {
 		}
 	}
 }
+
+func TestParseWeek(t *testing.T) {
+	now := at("2026-11-18 12:00") // Wednesday of 2026-W47
+	for in, want := range map[string]string{
+		"":           "2026-11-16",
+		"this":       "2026-11-16",
+		"Last":       "2026-11-09",
+		"-0":         "2026-11-16",
+		"-3":         "2026-10-26",
+		"2026-W47":   "2026-11-16",
+		"2026-w01":   "2025-12-29", // week 1 can start in the previous year
+		"2020-W53":   "2020-12-28",
+		"2026-11-22": "2026-11-16", // Sunday
+		"2026-11-23": "2026-11-23",
+	} {
+		got, err := ParseWeek(in, now)
+		if err != nil || got.Format("2006-01-02 15:04") != want+" 00:00" {
+			t.Errorf("ParseWeek(%q) = %v, %v; want %s", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"next", "2026-W54", "2025-W53", "-1x", "2026-13-01"} {
+		if _, err := ParseWeek(bad, now); err == nil {
+			t.Errorf("ParseWeek(%q): expected error", bad)
+		}
+	}
+}
