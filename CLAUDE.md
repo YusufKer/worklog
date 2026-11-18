@@ -16,7 +16,7 @@ go run . -dir /tmp/wl -config /tmp/wl.toml    # isolate from the real ~/worklog 
 go run . report -week last -csv -dir /tmp/wl  # CLI report (report.go)
 ```
 
-There are no UI tests; `internal/ui` is verified by running the app. Avoid running against the user's real `~/worklog` data when testing.
+UI tests in `internal/ui` drive `Model.Update` directly (e.g. `TestFastTypingIntoInputs`); rendering and layout are checked by running the app, e.g. `-demo` in tmux and `tmux capture-pane -p`. Avoid running against the user's real `~/worklog` data when testing.
 
 ## Architecture
 
