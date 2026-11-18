@@ -46,7 +46,7 @@ var keysLeft = []keySection{
 
 var keysRight = []keySection{
 	{"List and notes", []hint{
-		{"e", "edit notes"}, {"t", "start/stop timer"}, {"T", "time entries"}, {"a i", "ask the agent"}, {",", "settings"}, {"?", "this help"},
+		{"e", "edit notes"}, {"t", "start/stop timer"}, {"T", "time entries"}, {"W", "week report"}, {"a i", "ask the agent"}, {",", "settings"}, {"?", "this help"},
 	}},
 	{"Editing notes", []hint{{"esc", "save and close"}, {"ctrl+s", "save"}}},
 	{"Agent", []hint{{"enter", "send"}, {"esc", "stop / back"}, {"↑/↓ pgup", "scroll"}, {"/clear", "new chat"}}},

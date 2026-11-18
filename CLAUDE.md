@@ -28,6 +28,8 @@ There are no UI tests; `internal/ui` is verified by running the app. Avoid runni
 - `GroupByDate` builds the list's date groups; unfinished todos from earlier days are *displayed* under Today (`Group.Carried`) without changing their `date`.
 - `timer.go`: time entries live in frontmatter `time:`; an open entry (no `end`) is the running timer. Only one runs at a time (`StartTimer` stops others). Totals split entries across midnight (`splitDays`). `Stale` drives the startup "forgotten timer" modal. Entries are identified by their `Start` (`PutTimeEntry`/`DeleteTimeEntry`), not by index, because `Update` re-reads the file.
 
+- `report.go`: `BuildWeek` totals time per todo per day (via `ByDay`, so entries crossing midnight split correctly) and renders Markdown/CSV. Reports are saved under `reports/`; `LoadAll` only globs top-level `*.md`, so subfolders are safe.
+
 ### internal/agent — pluggable backends
 - `Backend` interface (`Name`, `Resumable`, `Start`) returns a `Run` whose `Events` channel emits `Ev*` structs and always ends with exactly one `EvDone`. `launch()` handles process lifecycle, cancellation, and stderr capture for both backends.
 - `Claude` runs `claude -p --output-format stream-json --include-partial-messages` in the data dir with a restricted tool list (`Tools`, no shell) and `--resume <session>`. `Parser` turns stream-json lines into events; `testdata/stream.jsonl` is a recorded fixture used by `stream_test.go` — update it if the parser changes to handle new event shapes.

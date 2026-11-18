@@ -23,6 +23,7 @@ const (
 	modalSettings
 	modalKeys
 	modalTime
+	modalWeek
 )
 
 const modalWidth = 52

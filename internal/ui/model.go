@@ -59,6 +59,7 @@ type Model struct {
 	form  todoForm
 	stale staleTimerForm
 	times timeLog
+	week  weekReport
 	kept  map[string]bool // stale timers the user chose to keep running
 
 	ticking bool   // a timer tick loop is active
@@ -473,6 +474,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = modalKeys
 	case "T":
 		m.openTimeLog()
+	case "W":
+		m.modal, m.week = modalWeek, newWeekReport(time.Now())
 	case "/":
 		m.list.typing = true
 		m.list.filter.CursorEnd()
@@ -533,6 +536,9 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "T":
 		m.openTimeLog()
+		return m, nil
+	case "W":
+		m.modal, m.week = modalWeek, newWeekReport(time.Now())
 		return m, nil
 	case "g", "home":
 		m.notes.vp.GotoTop()
@@ -758,6 +764,9 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modalTime:
 		return m.updateTimeLog(msg)
 
+	case modalWeek:
+		return m.updateWeek(msg)
+
 	case modalDelete:
 		switch msg.String() {
 		case "y", "Y", "enter":
@@ -898,6 +907,44 @@ func (m Model) updateTimeLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.ensureTick()
 }
 
+// weekSize is the most room the week report may use.
+func (m Model) weekSize() (w, h int) {
+	return m.width - 4, m.height - 3
+}
+
+func (m Model) updateWeek(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	now := time.Now()
+	week := store.BuildWeek(m.list.all, m.week.start, now)
+	_, h := m.weekSize()
+	switch msg.String() {
+	case "esc", "q", "W":
+		m.modal = modalNone
+	case "h", "left", "[":
+		m.week.shift(-1)
+	case "l", "right", "]":
+		m.week.shift(1)
+	case "t":
+		m.week = newWeekReport(now)
+	case "j", "down":
+		m.week.scroll(1, len(week.Rows), visibleRows(h))
+	case "k", "up":
+		m.week.scroll(-1, len(week.Rows), visibleRows(h))
+	case "c":
+		if err := copyMarkdown(week); err != nil {
+			m.setStatus("Couldn't copy: "+err.Error(), true)
+		} else {
+			m.setStatus("Copied "+week.Name()+" as Markdown", false)
+		}
+	case "s":
+		if path, err := saveCSV(m.store.Dir, week); err != nil {
+			m.setStatus("Couldn't save: "+err.Error(), true)
+		} else {
+			m.setStatus("Saved "+shortenHome(path), false)
+		}
+	}
+	return m, nil
+}
+
 func (m *Model) toggleDone() {
 	t := m.list.selected()
 	if t == nil {
@@ -1022,6 +1069,10 @@ func (m Model) View() string {
 		body = overlay(body, keysView(), m.width, bodyH)
 	case modalTime:
 		body = overlay(body, m.times.view(time.Now()), m.width, bodyH)
+	case modalWeek:
+		now := time.Now()
+		w, h := m.weekSize()
+		body = overlay(body, m.week.view(store.BuildWeek(m.list.all, m.week.start, now), w, h, now), m.width, bodyH)
 	case modalStaleTimer:
 		body = overlay(body, m.stale.view(time.Now()), m.width, bodyH)
 	case modalSettings:
@@ -1084,6 +1135,8 @@ func (m Model) footerLeft() string {
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", "save"}, {"esc", "cancel"}})
 	case m.modal == modalTime && m.times.deleting:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
+	case m.modal == modalWeek:
+		return renderHelp([]hint{{"h/l", "prev/next week"}, {"t", "this week"}, {"j/k", "scroll"}, {"c", "copy Markdown"}, {"s", "save CSV"}, {"esc", "close"}})
 	case m.modal == modalTime:
 		return renderHelp([]hint{{"j/k", "move"}, {"a", "add"}, {"enter/e", "edit"}, {"d", "delete"}, {"esc", "close"}})
 	case m.modal == modalDelete:

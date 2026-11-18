@@ -61,6 +61,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `?` | show all keys |
 | | `t` | start/stop the timer (one at a time) |
 | | `T` | time entries: add (`a`), edit (`enter`), delete (`d`) |
+| | `W` | week report: `h`/`l` change week, `c` copy as Markdown, `s` save CSV |
 | | `a` / `i` | ask the agent |
 | notes | `j`/`k`, `g`/`G` | scroll |
 | | `esc` / `h` | back to list |
@@ -77,6 +78,10 @@ Date fields take `YYYY-MM-DD` or a shortcut: `today`, `tomorrow`,
 In the time entries editor, Start takes `HH:MM` or `YYYY-MM-DD HH:MM`; End
 also takes a duration like `1h30m`. Leave End empty to keep a running timer
 running. A todo's entries can't overlap or be in the future.
+
+The week report shows time per todo and day (Monday–Sunday). `s` saves it
+as CSV in decimal hours to `reports/2026-W47.csv` in the data folder; `c`
+copies it as a Markdown table.
 
 If a timer has been running since an earlier day, or longer than
 `stale_timer_hours`, worklog asks on startup whether to stop it at a given
