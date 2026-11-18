@@ -49,12 +49,16 @@ worklog -demo       # try it on sample data in a temp directory
 | list | `j`/`k`, `↑`/`↓`, `g`/`G` | move, top, bottom |
 | | `n` | new todo (title + date, default today) |
 | | `r` | rename or reschedule (renames the file to match) |
+| | `/` | search titles and notes (`enter` keeps the filter, `esc` clears) |
+| | `.` | hide/show done todos |
+| | `esc` | clear search and show done todos |
 | | `x` / `space` | toggle done (also stops its timer) |
 | | `d` | delete (moved to `.trash/`) |
 | | `enter` / `l` | go to notes |
 | | `q` | quit |
 | list, notes | `e` | edit notes inline |
 | | `,` | settings |
+| | `?` | show all keys |
 | | `t` | start/stop the timer (one at a time) |
 | | `a` / `i` | ask the agent |
 | notes | `j`/`k`, `g`/`G` | scroll |

@@ -81,6 +81,7 @@ func New(s *store.Store, todos []*store.Todo, o Options) Model {
 		cfgPath:       o.ConfigPath,
 		dirOverridden: o.DirOverridden,
 		notes:         newNotes(o.GlamStyle),
+		list:          newList(),
 		agent:         newAgent(o.GlamStyle, backend.Name(), isClaude(backend)),
 		kept:          map[string]bool{},
 	}
@@ -111,7 +112,7 @@ func (m Model) Init() tea.Cmd {
 
 // runningTodo returns the todo whose timer is running, if any.
 func (m Model) runningTodo() *store.Todo {
-	for _, t := range m.list.todos {
+	for _, t := range m.list.all {
 		if t.Running() != nil {
 			return t
 		}
@@ -135,7 +136,7 @@ func (m *Model) checkStale() {
 		return
 	}
 	now := time.Now()
-	for _, t := range m.list.todos {
+	for _, t := range m.list.all {
 		if e := t.Running(); e != nil && e.Stale(now, m.staleAfter) && !m.kept[t.ID] {
 			m.stale = newStaleForm(t, now)
 			m.modal = modalStaleTimer
@@ -157,7 +158,7 @@ func (m *Model) toggleTimer() tea.Cmd {
 		}
 		m.setStatus(fmt.Sprintf("Stopped · %s on “%s”", store.FormatDuration(now.Sub(e.Start)), t.Title), false)
 	} else {
-		if err := m.store.StartTimer(t, m.list.todos, now); err != nil {
+		if err := m.store.StartTimer(t, m.list.all, now); err != nil {
 			m.setStatus("Couldn't start timer: "+err.Error(), true)
 			return nil
 		}
@@ -221,6 +222,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.notes.editing {
 			return m.updateEditor(msg)
 		}
+		if m.list.typing {
+			return m.updateFilter(msg)
+		}
 		// Fast key repeat can arrive as one multi-rune message ("jjj");
 		// handle each rune as its own keypress.
 		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste && m.focus != focusAgent {
@@ -269,11 +273,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notes.ta, cmd = m.notes.ta.Update(msg)
 		return m, cmd
 	}
+	if m.list.typing {
+		var cmd tea.Cmd
+		m.list.filter, cmd = m.list.filter.Update(msg)
+		return m, cmd
+	}
 	if m.focus == focusAgent {
 		var cmd tea.Cmd
 		m.agent.input, cmd = m.agent.input.Update(msg)
 		return m, cmd
 	}
+	return m, nil
+}
+
+// updateFilter handles keys while typing in the list's filter bar. The list
+// narrows as you type; up/down move through the matches.
+func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.list.clearQuery()
+	case "enter", "tab":
+		m.list.typing = false
+		m.list.filter.Blur()
+		m.list.scroll()
+		if m.list.query == "" {
+			m.list.filter.SetValue("")
+		}
+	case "up", "ctrl+p":
+		m.list.move(-1)
+	case "down", "ctrl+n":
+		m.list.move(1)
+	default:
+		var cmd tea.Cmd
+		m.list.filter, cmd = m.list.filter.Update(msg)
+		m.list.setQuery(m.list.filter.Value())
+		m.syncSelection()
+		return m, cmd
+	}
+	m.syncSelection()
 	return m, nil
 }
 
@@ -380,7 +417,7 @@ func (m Model) sendPrompt() (tea.Model, tea.Cmd) {
 // conversation, or forgets it if it could not be resumed.
 func (m *Model) finishRun(todoID string, done agent.EvDone) {
 	var t *store.Todo
-	for _, x := range m.list.todos {
+	for _, x := range m.list.all {
 		if x.ID == todoID {
 			t = x
 		}
@@ -429,6 +466,25 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = modalTodo
 		m.form = newForm()
 		return m, textinput.Blink
+	case "?":
+		m.modal = modalKeys
+	case "/":
+		m.list.typing = true
+		m.list.filter.CursorEnd()
+		m.list.scroll()
+		return m, m.list.filter.Focus()
+	case "esc":
+		if m.list.filtered() {
+			m.list.clearFilter()
+		}
+	case ".":
+		m.list.hideDone = !m.list.hideDone
+		m.list.apply()
+		if m.list.hideDone {
+			m.setStatus("Hiding done todos", false)
+		} else {
+			m.setStatus("Showing done todos", false)
+		}
 	case "r":
 		if t := m.list.selected(); t != nil {
 			if m.agent.running(t.ID) {
@@ -467,6 +523,9 @@ func (m Model) updateNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.toggleTimer()
 	case ",":
 		return m, m.openSettings()
+	case "?":
+		m.modal = modalKeys
+		return m, nil
 	case "g", "home":
 		m.notes.vp.GotoTop()
 		return m, nil
@@ -514,7 +573,7 @@ func (m Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // saveNotes writes the editor contents to the todo being edited.
 func (m *Model) saveNotes() bool {
 	var target *store.Todo
-	for _, t := range m.list.todos {
+	for _, t := range m.list.all {
 		if t.ID == m.notes.editID {
 			target = t
 		}
@@ -684,6 +743,10 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.checkStale()
 		return m, nil
 
+	case modalKeys:
+		m.modal = modalNone // any key closes it
+		return m, nil
+
 	case modalDelete:
 		switch msg.String() {
 		case "y", "Y", "enter":
@@ -708,8 +771,8 @@ func (m Model) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var err error
 			if m.form.edit != nil {
 				t, err = m.store.Edit(m.form.edit, title, date)
-			} else {
-				t, err = m.store.Create(title, date)
+			} else if t, err = m.store.Create(title, date); err == nil {
+				m.list.clearFilter() // so the new todo is visible
 			}
 			if err != nil {
 				m.form.err = capitalize(err.Error())
@@ -819,7 +882,11 @@ func (m Model) View() string {
 	bodyH := m.height - 1
 	rightW := m.width - m.listW
 
-	list := renderPane("Todos", m.list.view(m.listW-2, m.focus == focusList),
+	listTitle := "Todos"
+	if m.list.filtered() {
+		listTitle += fmt.Sprintf(" · %d/%d", len(m.list.todos), len(m.list.all))
+	}
+	list := renderPane(listTitle, m.list.view(m.listW-2, m.focus == focusList),
 		m.listW, bodyH, m.focus == focusList)
 
 	notesTitle := "Notes"
@@ -846,6 +913,8 @@ func (m Model) View() string {
 		body = overlay(body, m.form.view(), m.width, bodyH)
 	case modalDelete:
 		body = overlay(body, deleteView(m.list.selected()), m.width, bodyH)
+	case modalKeys:
+		body = overlay(body, keysView(), m.width, bodyH)
 	case modalStaleTimer:
 		body = overlay(body, m.stale.view(time.Now()), m.width, bodyH)
 	case modalSettings:
@@ -902,6 +971,8 @@ func (m Model) footerLeft() string {
 			action = "save"
 		}
 		return renderHelp([]hint{{"tab", "switch field"}, {"enter", action}, {"esc", "cancel"}})
+	case m.modal == modalKeys:
+		return renderHelp([]hint{{"any key", "close"}})
 	case m.modal == modalDelete:
 		return renderHelp([]hint{{"y", "delete"}, {"n/esc", "cancel"}})
 	case m.modal == modalSettings && m.settings.raw:
@@ -910,6 +981,8 @@ func (m Model) footerLeft() string {
 		return renderHelp([]hint{{"↑/↓", "field"}, {"←/→", "change"}, {"enter", "save"}, {"ctrl+e", "edit raw TOML"}, {"esc", "cancel"}})
 	case m.modal == modalStaleTimer:
 		return renderHelp([]hint{{"enter", "stop at time"}, {"n", "stop now"}, {"k", "keep running"}, {"d", "discard"}})
+	case m.list.typing:
+		return renderHelp([]hint{{"enter", "keep filter"}, {"↑/↓", "move"}, {"esc", "clear"}})
 	case m.notes.editing:
 		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"ctrl+c", "save & quit"}})
 	}

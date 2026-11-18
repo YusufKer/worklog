@@ -5,17 +5,32 @@ import (
 	"time"
 
 	"github.com/YusufKer/worklog/internal/store"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // listModel is the date-grouped todo list on the left.
 type listModel struct {
+	all    []*store.Todo // every todo, filtered or not
 	groups []store.Group
-	todos  []*store.Todo // display order; the cursor indexes into this
+	todos  []*store.Todo // visible todos in display order; the cursor indexes into this
 	cursor int
 	offset int // first visible row
-	height int // visible rows
+	height int // pane body height, including the filter bar
+
+	filter   textinput.Model
+	typing   bool   // the filter input has focus
+	query    string // applied filter: every word must appear in the title or notes
+	hideDone bool
+}
+
+func newList() listModel {
+	in := textinput.New()
+	in.Prompt = "/"
+	in.Placeholder = "search titles and notes"
+	in.CharLimit = 100
+	return listModel{filter: in}
 }
 
 type listRow struct {
@@ -26,10 +41,75 @@ type listRow struct {
 }
 
 func (l *listModel) setTodos(todos []*store.Todo) {
-	l.groups = store.GroupByDate(todos, time.Now())
+	l.all = todos
+	l.apply()
+}
+
+// filtered reports whether some todos may be hidden.
+func (l *listModel) filtered() bool { return l.query != "" || l.hideDone }
+
+// showBar reports whether the filter bar takes the top row.
+func (l *listModel) showBar() bool { return l.typing || l.query != "" }
+
+// rowsHeight is the number of rows available for todos.
+func (l *listModel) rowsHeight() int {
+	if l.showBar() {
+		return max(l.height-1, 0)
+	}
+	return l.height
+}
+
+// setQuery applies a new filter query.
+func (l *listModel) setQuery(q string) {
+	l.query = strings.TrimSpace(q)
+	l.apply()
+}
+
+// clearQuery stops typing and removes the search query.
+func (l *listModel) clearQuery() {
+	l.typing, l.query = false, ""
+	l.filter.SetValue("")
+	l.filter.Blur()
+	l.apply()
+}
+
+// clearFilter removes the search query and shows done todos again.
+func (l *listModel) clearFilter() {
+	l.hideDone = false
+	l.clearQuery()
+}
+
+// apply rebuilds the visible list from all, keeping the selected todo if
+// it is still visible.
+func (l *listModel) apply() {
+	keep := l.selected()
+	terms := strings.Fields(strings.ToLower(l.query))
+	var visible []*store.Todo
+	for _, t := range l.all {
+		if (!l.hideDone || !t.Done) && matches(t, terms) {
+			visible = append(visible, t)
+		}
+	}
+	l.groups = store.GroupByDate(visible, time.Now())
 	l.todos = store.Flatten(l.groups)
-	l.cursor = clamp(l.cursor, 0, len(todos)-1)
+	l.cursor = clamp(l.cursor, 0, len(l.todos)-1)
+	if keep != nil {
+		l.selectID(keep.ID)
+	}
 	l.scroll()
+}
+
+func matches(t *store.Todo, terms []string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+	text := strings.ToLower(t.Title + "\n" + t.Notes)
+	for _, term := range terms {
+		if !strings.Contains(text, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *listModel) selected() *store.Todo {
@@ -95,20 +175,35 @@ func (l *listModel) scroll() {
 	if cursorRow > 0 && rows[cursorRow-1].header != "" && cursorRow-1 < l.offset {
 		l.offset = cursorRow - 1
 	}
-	if cursorRow >= l.offset+l.height {
-		l.offset = cursorRow - l.height + 1
+	h := l.rowsHeight()
+	if cursorRow >= l.offset+h {
+		l.offset = cursorRow - h + 1
 	}
-	l.offset = clamp(l.offset, 0, max(len(rows)-l.height, 0))
+	l.offset = clamp(l.offset, 0, max(len(rows)-h, 0))
 }
 
 func (l listModel) view(width int, focused bool) string {
-	if len(l.todos) == 0 {
-		return styleMuted.Render(" No todos yet.")
+	var out []string
+	if l.showBar() {
+		bar := l.filter
+		bar.Width = max(width-3, 1)
+		if !l.typing {
+			bar.PromptStyle = styleMuted
+			bar.TextStyle = styleMuted
+		}
+		out = append(out, " "+bar.View())
+	}
+	switch {
+	case len(l.all) == 0:
+		out = append(out, styleMuted.Render(" No todos yet."))
+	case len(l.todos) == 0 && l.query != "":
+		out = append(out, styleMuted.Render(" No matches."))
+	case len(l.todos) == 0:
+		out = append(out, styleMuted.Render(" Nothing open. Press . to show done todos."))
 	}
 	rows := l.rows()
 	now := time.Now()
-	var out []string
-	for _, r := range rows[min(l.offset, len(rows)):min(l.offset+l.height, len(rows))] {
+	for _, r := range rows[min(l.offset, len(rows)):min(l.offset+l.rowsHeight(), len(rows))] {
 		out = append(out, l.renderRow(r, width, focused, now))
 	}
 	return strings.Join(out, "\n")
@@ -120,7 +215,7 @@ func (l listModel) renderRow(r listRow, width int, focused bool, now time.Time) 
 			return ""
 		}
 		h := styleHeader.Render(" " + r.header)
-		if worked := store.WorkedOn(l.todos, r.date, now); worked >= time.Minute {
+		if worked := store.WorkedOn(l.all, r.date, now); worked >= time.Minute {
 			h += styleMuted.Render(" · " + store.FormatDuration(worked))
 		}
 		return h

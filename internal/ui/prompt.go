@@ -21,6 +21,7 @@ const (
 	modalDelete
 	modalStaleTimer
 	modalSettings
+	modalKeys
 )
 
 const modalWidth = 52
