@@ -48,22 +48,33 @@ func New(dir string) (*Store, error) {
 	return &Store{Dir: dir}, nil
 }
 
+// BadFile is a todo file that couldn't be read or parsed.
+type BadFile struct {
+	Name string // file name within the directory
+	Err  error
+}
+
+func (b BadFile) String() string { return b.Name + ": " + b.Err.Error() }
+
 // LoadAll reads every .md file in the directory, sorted newest date first.
-func (s *Store) LoadAll() ([]*Todo, error) {
+// Files that can't be read or parsed are skipped and returned as bad, so
+// one broken file doesn't hide the rest.
+func (s *Store) LoadAll() (todos []*Todo, bad []BadFile, err error) {
 	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.md"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	todos := make([]*Todo, 0, len(paths))
+	todos = make([]*Todo, 0, len(paths))
 	for _, p := range paths {
 		t, err := Load(p)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(p), err)
+			bad = append(bad, BadFile{Name: filepath.Base(p), Err: err})
+			continue
 		}
 		todos = append(todos, t)
 	}
 	Sort(todos)
-	return todos, nil
+	return todos, bad, nil
 }
 
 // Sort orders todos by date (newest first), then creation time (newest first).

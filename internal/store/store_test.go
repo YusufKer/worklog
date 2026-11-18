@@ -44,7 +44,7 @@ func TestLoadAllSortsAndGroups(t *testing.T) {
 	write("d.md", "---\ntitle: Yest\ndate: 2026-11-16\ndone: true\n---\n")
 
 	s, _ := New(dir)
-	todos, err := s.LoadAll()
+	todos, _, err := s.LoadAll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestCreateToggleDelete(t *testing.T) {
 	if fileExists(td.Path) || !fileExists(filepath.Join(dir, ".trash", "2026-11-17-fix-the-bug.md")) {
 		t.Fatal("file not moved to trash")
 	}
-	todos, _ := s.LoadAll()
+	todos, _, _ := s.LoadAll()
 	if len(todos) != 1 {
 		t.Fatalf("want 1 todo after delete, got %d", len(todos))
 	}
@@ -162,5 +162,27 @@ func TestEdit(t *testing.T) {
 
 	if _, err := s.Edit(moved, "x", "tomorrow"); err == nil {
 		t.Fatal("expected error for bad date")
+	}
+}
+
+func TestLoadAllSkipsBadFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	s.Create("Good", "2026-11-18")
+	os.WriteFile(filepath.Join(dir, "broken.md"), []byte("---\ntitle: [unclosed\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "unterminated.md"), []byte("---\ntitle: x\n"), 0o644)
+
+	todos, bad, err := s.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(todos) != 1 || todos[0].Title != "Good" {
+		t.Fatalf("todos = %+v", todos)
+	}
+	if len(bad) != 2 || bad[0].Name != "broken.md" || bad[1].Name != "unterminated.md" {
+		t.Fatalf("bad = %v", bad)
+	}
+	if got := bad[1].String(); got != "unterminated.md: unterminated frontmatter" {
+		t.Errorf("String() = %q", got)
 	}
 }

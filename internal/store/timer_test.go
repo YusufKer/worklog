@@ -103,7 +103,7 @@ func TestTimerLifecycle(t *testing.T) {
 	s, _ := New(t.TempDir())
 	a, _ := s.Create("A", "2026-11-17")
 	b, _ := s.Create("B", "2026-11-17")
-	all := func() []*Todo { ts, _ := s.LoadAll(); return ts }
+	all := func() []*Todo { ts, _, _ := s.LoadAll(); return ts }
 	find := func(id string) *Todo {
 		for _, x := range all() {
 			if x.ID == id {

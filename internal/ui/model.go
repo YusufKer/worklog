@@ -38,7 +38,8 @@ type Options struct {
 	GlamStyle     string // "dark" or "light", detected before the program starts
 	Config        config.Config
 	ConfigPath    string
-	DirOverridden bool // the data dir came from -dir, $WORKLOG_DIR or -demo
+	DirOverridden bool            // the data dir came from -dir, $WORKLOG_DIR or -demo
+	Skipped       []store.BadFile // files the initial load couldn't read
 }
 
 // Model is the root Bubble Tea model.
@@ -63,6 +64,7 @@ type Model struct {
 	kept  map[string]bool // stale timers the user chose to keep running
 
 	stamps  map[string]string // last poll of the data directory
+	skipped []store.BadFile   // todo files that couldn't be read
 	ticking bool              // a timer tick loop is active
 	status  string            // one-shot message shown in the footer
 	isErr   bool
@@ -90,6 +92,7 @@ func New(s *store.Store, todos []*store.Todo, o Options) Model {
 	}
 	m.list.setTodos(todos)
 	m.syncSelection()
+	m.setSkipped(o.Skipped)
 	if s != nil {
 		m.stamps = fileStamps(s.Dir) // baseline for spotting outside changes
 	}
@@ -700,6 +703,7 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) applySettings(cfg config.Config, save func() error) error {
 	var newStore *store.Store
 	var todos []*store.Todo
+	var skipped []store.BadFile
 	if !m.dirOverridden {
 		dir := cfg.Dir
 		if dir == "" {
@@ -716,7 +720,7 @@ func (m *Model) applySettings(cfg config.Config, save func() error) error {
 			if newStore, err = store.New(dir); err != nil {
 				return err
 			}
-			if todos, err = newStore.LoadAll(); err != nil {
+			if todos, skipped, err = newStore.LoadAll(); err != nil {
 				return err
 			}
 		}
@@ -738,6 +742,7 @@ func (m *Model) applySettings(cfg config.Config, save func() error) error {
 		m.list.setTodos(todos)
 		m.notes.invalidate()
 		m.syncSelection()
+		m.setSkipped(skipped)
 	}
 	return nil
 }
@@ -1000,11 +1005,12 @@ func (m *Model) deleteSelected() {
 // reload re-reads all todos from disk, keeping the cursor on selectID when
 // given, or on the same position otherwise.
 func (m *Model) reload(selectID string) {
-	todos, err := m.store.LoadAll()
+	todos, skipped, err := m.store.LoadAll()
 	if err != nil {
 		m.setStatus("Couldn't load todos: "+err.Error(), true)
 		return
 	}
+	m.setSkipped(skipped)
 	m.list.setTodos(todos)
 	if selectID != "" {
 		m.list.selectID(selectID)
@@ -1032,6 +1038,26 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// setSkipped records unreadable files, warning when the set changes.
+func (m *Model) setSkipped(bad []store.BadFile) {
+	same := len(bad) == len(m.skipped)
+	for i := 0; same && i < len(bad); i++ {
+		same = bad[i].String() == m.skipped[i].String()
+	}
+	m.skipped = bad
+	switch {
+	case same:
+	case len(bad) == 1:
+		m.setStatus("Skipped "+bad[0].String(), true)
+	case len(bad) > 1:
+		names := make([]string, len(bad))
+		for i, b := range bad {
+			names[i] = b.Name
+		}
+		m.setStatus(fmt.Sprintf("Skipped %d unreadable files: %s", len(bad), strings.Join(names, ", ")), true)
+	}
 }
 
 func (m *Model) setStatus(s string, isErr bool) {
@@ -1063,6 +1089,9 @@ func (m Model) View() string {
 	listTitle := "Todos"
 	if m.list.filtered() {
 		listTitle += fmt.Sprintf(" · %d/%d", len(m.list.todos), len(m.list.all))
+	}
+	if len(m.skipped) > 0 {
+		listTitle += fmt.Sprintf(" · %d skipped", len(m.skipped))
 	}
 	list := renderPane(listTitle, m.list.view(m.listW-2, m.focus == focusList),
 		m.listW, bodyH, m.focus == focusList)

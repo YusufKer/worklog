@@ -22,6 +22,7 @@ There are no UI tests; `internal/ui` is verified by running the app. Avoid runni
 `main.go` resolves the data dir (precedence: `-demo` > `-dir` > `$WORKLOG_DIR` > config `dir` > `~/worklog`), loads todos, and starts `ui.Model`. `DirOverridden` tells the settings screen the dir can't be changed in-app.
 
 ### internal/store — the files are the database
+- `LoadAll` skips unparseable files and returns them as `[]BadFile`; the UI shows a "skipped" count and never writes to them.
 - One `.md` file per todo: `YYYY-MM-DD-<slug>.md`, frontmatter (`Todo` struct, yaml tags) + notes body. `Parse`/`Marshal` round-trip it; files without frontmatter still load.
 - `Save` is atomic (temp file + rename). **Mutations go through `Store.Update(t, fn)`**, which re-reads from disk before applying `fn`, because the agent edits the same files concurrently. Don't write a stale in-memory `Todo` back with `Save` directly.
 - `Edit` (rename/reschedule) renames the file to `date-slug.md` but keeps the `id`; UI state (agent conversations, editor) is keyed by ID, not path. Delete moves files to `.trash/`.

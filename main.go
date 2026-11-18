@@ -59,7 +59,7 @@ func run(dirFlag, configPath string, demo bool) error {
 	if err != nil {
 		return err
 	}
-	todos, err := s.LoadAll()
+	todos, skipped, err := s.LoadAll()
 	if err != nil {
 		return err
 	}
@@ -73,6 +73,7 @@ func run(dirFlag, configPath string, demo bool) error {
 		GlamStyle:     glamStyle,
 		Config:        cfg,
 		ConfigPath:    configPath,
+		Skipped:       skipped,
 		DirOverridden: demo || dirFlag != "" || os.Getenv("WORKLOG_DIR") != "",
 	})
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()

@@ -25,7 +25,7 @@ func TestPollReloadsAndSaveKeepsOtherVersion(t *testing.T) {
 	s, _ := store.New(t.TempDir())
 	td, _ := s.Create("Fix bug", "2026-11-18")
 	td, _ = s.Update(td, func(x *store.Todo) { x.Notes = "original\n" })
-	todos, _ := s.LoadAll()
+	todos, _, _ := s.LoadAll()
 	m := New(s, todos, Options{Config: config.Config{Agent: config.Agent{Type: "claude"}}})
 	m.width, m.height = 100, 30
 	m.layout()
