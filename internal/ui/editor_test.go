@@ -39,6 +39,10 @@ func press(m Model, keys ...string) Model {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlS}
 		case "pgup":
 			msg = tea.KeyMsg{Type: tea.KeyPgUp}
+		case "ctrl+f":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlF}
+		case "ctrl+b":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlB}
 		case "pgdown":
 			msg = tea.KeyMsg{Type: tea.KeyPgDown}
 		case "home":
@@ -249,6 +253,10 @@ func TestEditorPaging(t *testing.T) {
 	m = press(m, "pgdown", "pgup")
 	if got := m.notes.ta.Line(); got != page {
 		t.Fatalf("after pgdown pgup on line %d, want %d", got, page)
+	}
+	m = press(m, "ctrl+f", "ctrl+f", "ctrl+b")
+	if got := m.notes.ta.Line(); got != 2*page {
+		t.Fatalf("after ctrl+f ctrl+f ctrl+b on line %d, want %d", got, 2*page)
 	}
 	m = press(m, "end")
 	if got, last := m.notes.ta.Line(), m.notes.ta.LineCount()-1; got != last {

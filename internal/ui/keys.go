@@ -48,7 +48,7 @@ var keysRight = []keySection{
 	{"List and notes", []hint{
 		{"e", "edit notes"}, {"E", "open in $EDITOR"}, {"t", "start/stop timer"}, {"T", "time entries"}, {"W", "week report"}, {"a i", "ask the agent"}, {",", "settings"}, {"?", "this help"},
 	}},
-	{"Editing notes", []hint{{"esc", "save and close"}, {"ctrl+s", "save"}, {"pgup pgdn", "page up/down"}, {"home end", "top/bottom"}}},
+	{"Editing notes", []hint{{"esc", "save and close"}, {"ctrl+s", "save"}, {"ctrl+f ctrl+b", "page down/up"}, {"pgup pgdn", "page up/down"}, {"home end", "top/bottom"}}},
 	{"Agent", []hint{{"enter", "send"}, {"esc", "stop / back"}, {"↑/↓ pgup", "scroll"}, {"/clear", "new chat"}}},
 	{"Everywhere", []hint{{"tab", "next pane"}, {"ctrl+c", "quit"}}},
 }

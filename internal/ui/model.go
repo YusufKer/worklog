@@ -627,10 +627,12 @@ func (m Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("Saved", false)
 		}
 		return m, nil
-	case "pgup":
+	// ctrl+f/ctrl+b page as in vim and less: some terminals (iTerm2 among
+	// them) keep page up/down for their own scrollback.
+	case "pgup", "ctrl+b":
 		m.notes.movePage(-1)
 		return m, nil
-	case "pgdown":
+	case "pgdown", "ctrl+f":
 		m.notes.movePage(1)
 		return m, nil
 	// home/end jump to the ends of the note (fn+←/→ on a Mac, as in native
@@ -1374,7 +1376,7 @@ func (m Model) footerLeft() string {
 	case m.list.typing:
 		return renderHelp([]hint{{"enter", "keep filter"}, {"↑/↓", "move"}, {"esc", "clear"}})
 	case m.notes.editing:
-		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"pgup/pgdn", "page"}, {"home/end", "top/bottom"}, {"ctrl+c", "save & quit"}})
+		return renderHelp([]hint{{"esc", "save & close"}, {"ctrl+s", "save"}, {"ctrl+f/b pgup/pgdn", "page"}, {"home/end", "top/bottom"}, {"ctrl+c", "save & quit"}})
 	}
 	return renderHelp(helpFor(m.focus))
 }

@@ -73,7 +73,7 @@ worklog -demo       # try it on sample data in a temp directory
 | | `esc` / `h` | back to list |
 | editing | `esc` | save and stop editing |
 | | `ctrl+s` | save |
-| | `pgup`/`pgdn` (`fn+↑`/`fn+↓` on a Mac) | move a screenful up/down |
+| | `ctrl+f`/`ctrl+b`, `pgup`/`pgdn` | move a screenful down/up (some terminals keep `fn+↑`/`fn+↓` for their own scrollback) |
 | | `home`/`end` (`fn+←`/`fn+→` on a Mac) | jump to the top/bottom of the note |
 | | `ctrl+a`/`ctrl+e` | start/end of the line |
 | agent | `enter` | send |
